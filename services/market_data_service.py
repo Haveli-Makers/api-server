@@ -547,6 +547,47 @@ class MarketDataService:
             logger.error(f"Error getting trading rules for {connector_name}: {e}")
             return {"error": str(e)}
 
+    # ==================== 24h Volume ====================
+
+    async def get_24h_volume(
+        self,
+        connector_name: str,
+        trading_pair: str,
+        account_name: Optional[str] = None
+    ) -> Dict:
+        """
+        Fetch 24h volume for a trading pair using the VolumeOracle.
+
+        Args:
+            connector_name: Exchange connector name (e.g. "binance", "okx")
+            trading_pair: Trading pair in HB format (e.g. "BTC-USDT")
+            account_name: Optional account name for trading connector preference
+
+        Returns:
+            dict with exchange, trading_pair, symbol, base_volume, last_price, quote_volume
+        """
+        from hummingbot.core.volume_oracle.volume_oracle import VolumeOracle
+
+        try:
+            source = VolumeOracle.source_for_exchange(connector_name)
+            oracle = VolumeOracle(source=source)
+            try:
+                result = await oracle.get_24h_volume(trading_pair)
+                return {
+                    "exchange": result["exchange"],
+                    "trading_pair": result["trading_pair"],
+                    "symbol": result["symbol"],
+                    "base_volume": float(result["base_volume"]),
+                    "last_price": float(result["last_price"]),
+                    "quote_volume": float(result.get("quote_volume", 0)),
+                }
+            finally:
+                await oracle.close()
+
+        except Exception as e:
+            logger.error(f"Error fetching 24h volume for {connector_name}/{trading_pair}: {e}")
+            raise
+
     # ==================== Funding Info ====================
 
     async def get_funding_info(

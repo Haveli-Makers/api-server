@@ -213,3 +213,21 @@ class TradingPairResponse(BaseModel):
     connector_name: str = Field(description="Name of the connector")
     trading_pair: str = Field(description="Trading pair that was added/removed")
     message: str = Field(description="Status message")
+
+
+# 24h Volume Models
+
+class VolumeRequest(BaseModel):
+    """Request model for getting 24h volume"""
+    exchange: str = Field(description="Exchange name (e.g. 'binance', 'binance_perpetual')")
+    trading_pair: str = Field(description="Trading pair in BASE-QUOTE format (e.g. 'BTC-USDT')")
+
+
+class VolumeResponse(BaseModel):
+    """Response for 24h volume data"""
+    exchange: str = Field(description="Exchange name")
+    trading_pair: str = Field(description="Trading pair in BASE-QUOTE format")
+    symbol: str = Field(description="Exchange symbol (e.g. 'BTCUSDT')")
+    base_volume: float = Field(description="24h base asset volume")
+    last_price: float = Field(description="Last traded price")
+    quote_volume: float = Field(description="24h quote asset volume")
