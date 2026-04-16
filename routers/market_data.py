@@ -15,6 +15,7 @@ from models import (
     SpreadAverageRequest, SpreadAverageResponse, SpreadAverageData,
     AddTradingPairRequest, RemoveTradingPairRequest, TradingPairResponse
 )
+from models.market_data import VolumeRequest, VolumeResponse
 from deps import get_market_data_service
 
 router = APIRouter(tags=["Market Data"], prefix="/market-data")
@@ -689,5 +690,42 @@ async def restart_order_book_tracker(
             status_code=500,
             detail=f"Error restarting order book tracker: {str(e)}"
         )
+
+
+# 24h Volume Endpoints
+
+@router.post("/volume", response_model=VolumeResponse)
+async def get_24h_volume(
+    request: VolumeRequest,
+    market_data_service: MarketDataService = Depends(get_market_data_service),
+):
+    """
+    Get 24h volume for a trading pair from a supported exchange.
+
+    Args:
+        request: Volume request with exchange name and trading pair
+
+    Returns:
+        24h volume data including base volume, quote volume, and last price
+    """
+    try:
+        result = await market_data_service.get_24h_volume(request.exchange, request.trading_pair)
+        return VolumeResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching 24h volume: {str(e)}")
+
+
+@router.get("/volume/supported-exchanges")
+async def get_supported_volume_exchanges():
+    """
+    Get list of exchanges supported for 24h volume queries.
+
+    Returns:
+        List of supported exchange names
+    """
+    from hummingbot.core.volume_oracle.volume_oracle import VOLUME_ORACLE_SOURCES
+    return sorted(VOLUME_ORACLE_SOURCES.keys())
 
 
