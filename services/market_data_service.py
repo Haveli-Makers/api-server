@@ -552,9 +552,9 @@ class MarketDataService:
     async def get_24h_volume(
         self,
         connector_name: str,
-        trading_pair: str,
+        trading_pairs: List[str],
         account_name: Optional[str] = None
-    ) -> Dict:
+    ) -> List[Dict]:
         """
         Fetch 24h volume for a trading pair using the VolumeOracle.
 
@@ -567,25 +567,39 @@ class MarketDataService:
             dict with exchange, trading_pair, symbol, base_volume, last_price, quote_volume
         """
         from hummingbot.core.volume_oracle.volume_oracle import VolumeOracle
+        
+        results=[]
+        errors = []
 
         try:
             source = VolumeOracle.source_for_exchange(connector_name)
             oracle = VolumeOracle(source=source)
             try:
-                result = await oracle.get_24h_volume(trading_pair)
-                return {
-                    "exchange": result["exchange"],
-                    "trading_pair": result["trading_pair"],
-                    "symbol": result["symbol"],
-                    "base_volume": float(result["base_volume"]),
-                    "last_price": float(result["last_price"]),
-                    "quote_volume": float(result.get("quote_volume", 0)),
-                }
+                for pair in trading_pairs:
+                    try: 
+                        result = await oracle.get_24h_volume(pair)
+                        results.append({
+                            "exchange": result["exchange"],
+                            "trading_pair": result["trading_pair"],
+                            "symbol": result["symbol"],
+                            "base_volume": float(result["base_volume"]),
+                            "last_price": float(result["last_price"]),
+                            "quote_volume": float(result.get("quote_volume", 0)),
+                        })
+                    except Exception as e:
+                        logger.error(f"Error fetching 24h volume for {connector_name}/{pair}: {e}")
+                        errors.append({
+                            "pair": pair,
+                            "error": str(e)
+                        })
+                        
             finally:
                 await oracle.close()
 
+            return {"data": results, "errors": errors}
+        
         except Exception as e:
-            logger.error(f"Error fetching 24h volume for {connector_name}/{trading_pair}: {e}")
+            logger.error(f"Error fetching 24h volume for {connector_name}/{trading_pairs}: {e}")
             raise
 
     # ==================== Funding Info ====================

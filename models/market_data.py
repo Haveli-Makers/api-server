@@ -220,14 +220,19 @@ class TradingPairResponse(BaseModel):
 class VolumeRequest(BaseModel):
     """Request model for getting 24h volume"""
     exchange: str = Field(description="Exchange name (e.g. 'binance', 'binance_perpetual')")
-    trading_pair: str = Field(description="Trading pair in BASE-QUOTE format (e.g. 'BTC-USDT')")
+    trading_pairs: List[str] = Field(
+        description="List of trading pairs (e.g. ['BTC-USDT', 'ETH-USDT'])"
+    )
+
+class VolumeResponseItem(BaseModel):
+    exchange: str = Field(description="Exchange name")
+    trading_pair: str = Field(description="Trading pair")
+    symbol: str = Field(description="Symbol used by the exchange for the trading pair")
+    base_volume: float = Field(description="24h base volume")
+    last_price: float = Field(description="Last price")
+    quote_volume: float = Field(description="24h quote volume")
 
 
 class VolumeResponse(BaseModel):
-    """Response for 24h volume data"""
-    exchange: str = Field(description="Exchange name")
-    trading_pair: str = Field(description="Trading pair in BASE-QUOTE format")
-    symbol: str = Field(description="Exchange symbol (e.g. 'BTCUSDT')")
-    base_volume: float = Field(description="24h base asset volume")
-    last_price: float = Field(description="Last traded price")
-    quote_volume: float = Field(description="24h quote asset volume")
+    data: List[VolumeResponseItem] = Field(description="List of 24h volume data for each trading pair")
+    errors: Optional[List[Dict]] = Field(default=None, description="List of errors encountered while fetching 24h volume data")
