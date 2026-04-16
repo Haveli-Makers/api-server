@@ -697,6 +697,7 @@ async def restart_order_book_tracker(
 @router.post("/volume", response_model=VolumeResponse)
 async def get_24h_volume(
     request: VolumeRequest,
+    market_data_service: MarketDataService = Depends(get_market_data_service),
 ):
     """
     Get 24h volume for a trading pair from a supported exchange.
@@ -707,10 +708,8 @@ async def get_24h_volume(
     Returns:
         24h volume data including base volume, quote volume, and last price
     """
-    from services.volume_service import get_24h_volume as fetch_volume
-
     try:
-        result = await fetch_volume(request.exchange, request.trading_pair)
+        result = await market_data_service.get_24h_volume(request.exchange, request.trading_pair)
         return VolumeResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -726,7 +725,7 @@ async def get_supported_volume_exchanges():
     Returns:
         List of supported exchange names
     """
-    from services.volume_service import get_supported_exchanges
-    return get_supported_exchanges()
+    from hummingbot.core.volume_oracle.volume_oracle import VOLUME_ORACLE_SOURCES
+    return sorted(VOLUME_ORACLE_SOURCES.keys())
 
 
