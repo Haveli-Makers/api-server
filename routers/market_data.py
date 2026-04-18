@@ -709,13 +709,23 @@ async def get_24h_volume(
         24h volume data including base volume, quote volume, and last price
     """
     try:
-        result = await market_data_service.get_24h_volume(request.exchange, request.trading_pair)
-        return VolumeResponse(**result)
+        response = await market_data_service.get_24h_volume(
+            request.exchange,
+            request.trading_pairs
+        )
+
+        return VolumeResponse(
+            data=response["data"],
+            errors=response["errors"] if response["errors"] else None
+        )
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching 24h volume: {str(e)}")
-
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching 24h volume: {str(e)}"
+        )
 
 @router.get("/volume/supported-exchanges")
 async def get_supported_volume_exchanges():
