@@ -548,7 +548,14 @@ class MarketDataService:
             return {"error": str(e)}
 
     # ==================== 24h Volume ====================
-
+    def _safe_float(self, value, default=0.0):
+        try:
+            if value in (None, "", "None", "N/A", "--"):
+                return default
+            return float(value)
+        except Exception:
+            return default
+        
     async def get_24h_volume(
         self,
         connector_name: str,
@@ -564,7 +571,11 @@ class MarketDataService:
             source = VolumeOracle.source_for_exchange(connector_name)
             oracle = VolumeOracle(source=source)
 
-            all_volumes = await oracle.get_all_24h_volumes()
+            try:
+                all_volumes = await oracle.get_all_24h_volumes()
+            except Exception as e:
+                logger.error(f"Oracle failed BEFORE processing: {e}")
+                raise
 
             requested_symbols: dict = {}  
             if trading_pairs:
@@ -581,18 +592,15 @@ class MarketDataService:
 
                     found_symbols.add(normalised)
 
-                    trading_pair = volume_data.get("trading_pair")
-                    if not trading_pair:
-                        logger.warning(f"Skipping symbol '{symbol}': no trading_pair in volume data")
-                        continue
+                    trading_pair = volume_data.get("trading_pair") or self._symbol_to_trading_pair(symbol)
 
                     results.append({
                         "exchange": volume_data.get("exchange", connector_name),
                         "trading_pair": trading_pair,
                         "symbol": volume_data.get("symbol", symbol),
-                        "base_volume": float(volume_data.get("base_volume", 0)),
-                        "last_price": float(volume_data.get("last_price", 0)),
-                        "quote_volume": float(volume_data.get("quote_volume", 0)),
+                        "base_volume": self._safe_float(volume_data.get("base_volume", 0)),
+                        "last_price": self._safe_float(volume_data.get("last_price", 0)),
+                        "quote_volume": self._safe_float(volume_data.get("quote_volume", 0)),
                     })
 
                 except Exception as e:
@@ -760,6 +768,26 @@ class MarketDataService:
         if interval:
             return f"{feed_type.value}_{connector}_{trading_pair}_{interval}"
         return f"{feed_type.value}_{connector}_{trading_pair}"
+
+    def _symbol_to_trading_pair(self, symbol: str) -> str:
+        if "/" in symbol:
+            base, quote = symbol.split("/", 1)
+            return f"{base.upper()}-{quote.upper()}"
+
+        symbol_upper = symbol.upper()
+
+        quote_currencies = [
+            "USDT", "USDC", "BUSD", "TUSD", "BIDR",
+            "INR", "WRX", "BTC", "ETH", "BNB",
+            "EUR", "GBP", "USD", "TRY", "AUD",
+        ]
+        for quote in quote_currencies:
+            if symbol_upper.endswith(quote):
+                base = symbol_upper[: -len(quote)].rstrip("-")
+                if base:
+                    return f"{base}-{quote}"
+
+        raise ValueError(f"Unsupported symbol format: {symbol}")
 
     # ==================== Properties ====================
 
