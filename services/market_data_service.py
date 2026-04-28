@@ -20,6 +20,12 @@ from hummingbot.data_feed.candles_feed.candles_factory import CandlesFactory
 
 logger = logging.getLogger(__name__)
 
+_QUOTE_CURRENCIES = [
+    "USDT", "USDC", "BUSD", "TUSD", "BIDR",
+    "INR", "WRX", "BTC", "ETH", "BNB",
+    "EUR", "GBP", "USD", "TRY", "AUD",
+]
+
 
 class FeedType(Enum):
     """Types of market data feeds that can be managed."""
@@ -549,58 +555,86 @@ class MarketDataService:
 
     # ==================== 24h Volume ====================
 
+    def _safe_float(self, value, default=0.0):
+        try:
+            if value in (None, "", "None", "N/A", "--"):
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        return symbol.replace("/", "").replace("-", "").lower()
+
     async def get_24h_volume(
         self,
         connector_name: str,
         trading_pairs: List[str],
         account_name: Optional[str] = None
-    ) -> List[Dict]:
-        """
-        Fetch 24h volume for a trading pair using the VolumeOracle.
-
-        Args:
-            connector_name: Exchange connector name (e.g. "binance", "okx")
-            trading_pair: Trading pair in HB format (e.g. "BTC-USDT")
-            account_name: Optional account name for trading connector preference
-
-        Returns:
-            dict with exchange, trading_pair, symbol, base_volume, last_price, quote_volume
-        """
+    ) -> Dict:
         from hummingbot.core.volume_oracle.volume_oracle import VolumeOracle
-        
-        results=[]
+
+        results = []
         errors = []
 
         try:
             source = VolumeOracle.source_for_exchange(connector_name)
             oracle = VolumeOracle(source=source)
+
             try:
+                all_volumes = await oracle.get_all_24h_volumes()
+            except Exception as e:
+                logger.error(f"Oracle failed BEFORE processing: {e}")
+                raise
+
+            requested_symbols: dict = {}
+            if trading_pairs:
                 for pair in trading_pairs:
-                    try: 
-                        result = await oracle.get_24h_volume(pair)
-                        results.append({
-                            "exchange": result["exchange"],
-                            "trading_pair": result["trading_pair"],
-                            "symbol": result["symbol"],
-                            "base_volume": float(result["base_volume"]),
-                            "last_price": float(result["last_price"]),
-                            "quote_volume": float(result.get("quote_volume", 0)),
-                        })
-                    except Exception as e:
-                        logger.error(f"Error fetching 24h volume for {connector_name}/{pair}: {e}")
-                        errors.append({
-                            "pair": pair,
-                            "error": str(e)
-                        })
-                        
-            finally:
-                await oracle.close()
+                    requested_symbols[self._normalize_symbol(pair)] = pair
+
+            found_symbols: set = set()
+
+            for symbol, volume_data in all_volumes.items():
+                try:
+                    normalised = self._normalize_symbol(symbol)
+                    if requested_symbols and normalised not in requested_symbols:
+                        continue
+
+                    found_symbols.add(normalised)
+
+                    trading_pair = volume_data.get("trading_pair") or self._symbol_to_trading_pair(symbol)
+
+                    results.append({
+                        "exchange": volume_data.get("exchange", connector_name),
+                        "trading_pair": trading_pair,
+                        "symbol": volume_data.get("symbol", symbol),
+                        "base_volume": self._safe_float(volume_data.get("base_volume", 0)),
+                        "last_price": self._safe_float(volume_data.get("last_price", 0)),
+                        "quote_volume": self._safe_float(volume_data.get("quote_volume", 0)),
+                    })
+
+                except Exception as e:
+                    errors.append({"pair": symbol, "error": str(e)})
+
+            for normalised_key, original_pair in requested_symbols.items():
+                if normalised_key not in found_symbols:
+                    errors.append({
+                        "pair": original_pair,
+                        "error": f"Trading pair '{original_pair}' not found in {connector_name} volume data.",
+                    })
 
             return {"data": results, "errors": errors}
-        
+
         except Exception as e:
-            logger.error(f"Error fetching 24h volume for {connector_name}/{trading_pairs}: {e}")
+            logger.error(f"Error fetching 24h volume: {e}")
             raise
+
+        finally:
+            try:
+                await oracle.close()
+            except Exception:
+                pass
 
     # ==================== Funding Info ====================
 
@@ -746,6 +780,21 @@ class MarketDataService:
         if interval:
             return f"{feed_type.value}_{connector}_{trading_pair}_{interval}"
         return f"{feed_type.value}_{connector}_{trading_pair}"
+
+    def _symbol_to_trading_pair(self, symbol: str) -> str:
+        if "/" in symbol:
+            base, quote = symbol.split("/", 1)
+            return f"{base.upper()}-{quote.upper()}"
+
+        symbol_upper = symbol.upper()
+
+        for quote in _QUOTE_CURRENCIES:
+            if symbol_upper.endswith(quote):
+                base = symbol_upper[: -len(quote)].rstrip("-")
+                if base:
+                    return f"{base}-{quote}"
+
+        raise ValueError(f"Unsupported symbol format: {symbol}")
 
     # ==================== Properties ====================
 

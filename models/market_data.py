@@ -221,7 +221,8 @@ class VolumeRequest(BaseModel):
     """Request model for getting 24h volume"""
     exchange: str = Field(description="Exchange name (e.g. 'binance', 'binance_perpetual')")
     trading_pairs: List[str] = Field(
-        description="List of trading pairs (e.g. ['BTC-USDT', 'ETH-USDT'])"
+        default=[],
+        description="List of trading pairs (e.g. ['BTC-USDT', 'ETH-USDT']). Leave empty to fetch all trading pairs."
     )
 
 class VolumeResponseItem(BaseModel):
