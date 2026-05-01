@@ -577,27 +577,31 @@ class MarketDataService:
                 logger.error(f"Oracle failed BEFORE processing: {e}")
                 raise
 
-            requested_symbols: dict = {}  
+            requested_pairs: set = set()
             if trading_pairs:
                 for pair in trading_pairs:
-                    requested_symbols[pair.replace("-", "").replace("/", "").lower()] = pair
+                    requested_pairs.add(pair)
 
-            found_symbols: set = set()
+            found_pairs: set = set()
 
             for symbol, volume_data in all_volumes.items():
                 try:
-                    normalised = symbol.replace("/", "").replace("-", "").lower()
-                    if requested_symbols and normalised not in requested_symbols:
+                    trading_pair = volume_data.get("symbol") 
+                    if not trading_pair:
+                        errors.append({
+                            "pair": symbol,
+                            "error": "Volume data missing trading pair identifier.",
+                        })
                         continue
 
-                    found_symbols.add(normalised)
+                    if requested_pairs and trading_pair not in requested_pairs:
+                        continue
 
-                    trading_pair = volume_data.get("trading_pair") or self._symbol_to_trading_pair(symbol)
+                    found_pairs.add(trading_pair)
 
                     results.append({
                         "exchange": volume_data.get("exchange", connector_name),
                         "trading_pair": trading_pair,
-                        "symbol": volume_data.get("symbol", symbol),
                         "base_volume": self._safe_float(volume_data.get("base_volume", 0)),
                         "last_price": self._safe_float(volume_data.get("last_price", 0)),
                         "quote_volume": self._safe_float(volume_data.get("quote_volume", 0)),
@@ -606,11 +610,11 @@ class MarketDataService:
                 except Exception as e:
                     errors.append({"pair": symbol, "error": str(e)})
 
-            for normalised_key, original_pair in requested_symbols.items():
-                if normalised_key not in found_symbols:
+            for requested_pair in requested_pairs:
+                if requested_pair not in found_pairs:
                     errors.append({
-                        "pair": original_pair,
-                        "error": f"Trading pair '{original_pair}' not found in {connector_name} volume data.",
+                        "pair": requested_pair,
+                        "error": f"Trading pair '{requested_pair}' not found in {connector_name} volume data.",
                     })
 
             return {"data": results, "errors": errors}
@@ -768,26 +772,6 @@ class MarketDataService:
         if interval:
             return f"{feed_type.value}_{connector}_{trading_pair}_{interval}"
         return f"{feed_type.value}_{connector}_{trading_pair}"
-
-    def _symbol_to_trading_pair(self, symbol: str) -> str:
-        if "/" in symbol:
-            base, quote = symbol.split("/", 1)
-            return f"{base.upper()}-{quote.upper()}"
-
-        symbol_upper = symbol.upper()
-
-        quote_currencies = [
-            "USDT", "USDC", "BUSD", "TUSD", "BIDR",
-            "INR", "WRX", "BTC", "ETH", "BNB",
-            "EUR", "GBP", "USD", "TRY", "AUD",
-        ]
-        for quote in quote_currencies:
-            if symbol_upper.endswith(quote):
-                base = symbol_upper[: -len(quote)].rstrip("-")
-                if base:
-                    return f"{base}-{quote}"
-
-        raise ValueError(f"Unsupported symbol format: {symbol}")
 
     # ==================== Properties ====================
 
