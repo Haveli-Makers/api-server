@@ -548,60 +548,86 @@ class MarketDataService:
             return {"error": str(e)}
 
     # ==================== 24h Volume ====================
-
+    def _safe_float(self, value, default=0.0):
+        try:
+            if value in (None, "", "None", "N/A", "--"):
+                return default
+            return float(value)
+        except Exception:
+            return default
+        
     async def get_24h_volume(
         self,
         connector_name: str,
         trading_pairs: List[str],
         account_name: Optional[str] = None
-    ) -> List[Dict]:
-        """
-        Fetch 24h volume for a trading pair using the VolumeOracle.
-
-        Args:
-            connector_name: Exchange connector name (e.g. "binance", "okx")
-            trading_pair: Trading pair in HB format (e.g. "BTC-USDT")
-            account_name: Optional account name for trading connector preference
-
-        Returns:
-            dict with exchange, trading_pair, symbol, base_volume, last_price, quote_volume
-        """
+    ) -> Dict:
         from hummingbot.core.volume_oracle.volume_oracle import VolumeOracle
-        
-        results=[]
+
+        results = []
         errors = []
 
         try:
             source = VolumeOracle.source_for_exchange(connector_name)
             oracle = VolumeOracle(source=source)
+
             try:
+                all_volumes = await oracle.get_all_24h_volumes()
+            except Exception as e:
+                logger.error(f"Oracle failed BEFORE processing: {e}")
+                raise
+
+            requested_pairs: set = set()
+            if trading_pairs:
                 for pair in trading_pairs:
-                    try: 
-                        result = await oracle.get_24h_volume(pair)
-                        results.append({
-                            "exchange": result["exchange"],
-                            "trading_pair": result["trading_pair"],
-                            "symbol": result["symbol"],
-                            "base_volume": float(result["base_volume"]),
-                            "last_price": float(result["last_price"]),
-                            "quote_volume": float(result.get("quote_volume", 0)),
-                        })
-                    except Exception as e:
-                        logger.error(f"Error fetching 24h volume for {connector_name}/{pair}: {e}")
+                    requested_pairs.add(pair)
+
+            found_pairs: set = set()
+
+            for symbol, volume_data in all_volumes.items():
+                try:
+                    trading_pair = volume_data.get("symbol") 
+                    if not trading_pair:
                         errors.append({
-                            "pair": pair,
-                            "error": str(e)
+                            "pair": symbol,
+                            "error": "Volume data missing trading pair identifier.",
                         })
-                        
-            finally:
-                await oracle.close()
+                        continue
+
+                    if requested_pairs and trading_pair not in requested_pairs:
+                        continue
+
+                    found_pairs.add(trading_pair)
+
+                    results.append({
+                        "exchange": volume_data.get("exchange", connector_name),
+                        "trading_pair": trading_pair,
+                        "base_volume": self._safe_float(volume_data.get("base_volume", 0)),
+                        "last_price": self._safe_float(volume_data.get("last_price", 0)),
+                        "quote_volume": self._safe_float(volume_data.get("quote_volume", 0)),
+                    })
+
+                except Exception as e:
+                    errors.append({"pair": symbol, "error": str(e)})
+
+            for requested_pair in requested_pairs:
+                if requested_pair not in found_pairs:
+                    errors.append({
+                        "pair": requested_pair,
+                        "error": f"Trading pair '{requested_pair}' not found in {connector_name} volume data.",
+                    })
 
             return {"data": results, "errors": errors}
-        
+
         except Exception as e:
-            logger.error(f"Error fetching 24h volume for {connector_name}/{trading_pairs}: {e}")
+            logger.error(f"Error fetching 24h volume: {e}")
             raise
 
+        finally:
+            try:
+                await oracle.close()
+            except Exception:
+                pass
     # ==================== Funding Info ====================
 
     async def get_funding_info(
