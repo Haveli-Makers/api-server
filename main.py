@@ -47,6 +47,7 @@ from services.unified_connector_service import UnifiedConnectorService
 from services.market_data_service import MarketDataService
 from services.trading_service import TradingService
 from services.executor_service import ExecutorService
+from services.script_runner import ScriptRunnerService
 from database import AsyncDatabaseManager
 from utils.bot_archiver import BotArchiver
 from routers import (
@@ -234,6 +235,7 @@ async def lifespan(app: FastAPI):
         settings.aws.secret_key,
         settings.aws.s3_default_bucket_name
     )
+    script_runner_service = ScriptRunnerService()
 
     # Initialize database
     await db_manager.ensure_initialized()
@@ -251,6 +253,7 @@ async def lifespan(app: FastAPI):
     app.state.docker_service = docker_service
     app.state.gateway_service = gateway_service
     app.state.bot_archiver = bot_archiver
+    app.state.script_runner_service = script_runner_service
 
     # =========================================================================
     # 7. Start services
@@ -265,6 +268,7 @@ async def lifespan(app: FastAPI):
     accounts_service.start()
     market_data_service.start()
     executor_service.start()
+    await script_runner_service.start()
     await executor_service.recover_positions_from_db()
 
     logging.info("All services started successfully")
@@ -280,6 +284,7 @@ async def lifespan(app: FastAPI):
     bots_orchestrator.stop()
     await accounts_service.stop()
     await executor_service.stop()
+    await script_runner_service.stop()
     market_data_service.stop()
     await connector_service.stop_all()
     docker_service.cleanup()

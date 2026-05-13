@@ -2,13 +2,29 @@ import json
 import yaml
 from typing import Dict, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette import status
 
-from models import Script, ScriptConfig
+from deps import get_script_runner_service
+from models import (
+    Script,
+    ScriptRunRequest,
+    ScriptRunResult,
+    ScriptSchedule,
+    ScriptScheduleCreate,
+    ScriptScheduleHistory,
+)
+from services.script_runner import ScriptRunnerService
 from utils.file_system import fs_util
 
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
+
+
+def _list_files_safe(directory: str) -> List[str]:
+    try:
+        return fs_util.list_files(directory)
+    except FileNotFoundError:
+        return []
 
 
 @router.get("/", response_model=List[str])
@@ -19,7 +35,95 @@ async def list_scripts():
     Returns:
         List of script names (without .py extension)
     """
-    return [f.replace('.py', '') for f in fs_util.list_files('scripts') if f.endswith('.py')]
+    files = _list_files_safe("scripts") + _list_files_safe("strategies")
+    return sorted({f.replace(".py", "") for f in files if f.endswith(".py")})
+
+
+@router.post("/runs/instant", response_model=ScriptRunResult)
+async def run_script_instant(
+    request: ScriptRunRequest,
+    script_runner: ScriptRunnerService = Depends(get_script_runner_service),
+):
+    """
+    Run a strategy script immediately and return its output without storing history.
+    """
+    try:
+        return await script_runner.run_instant(request)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/schedules/", response_model=ScriptSchedule, status_code=status.HTTP_201_CREATED)
+async def create_script_schedule(
+    request: ScriptScheduleCreate,
+    script_runner: ScriptRunnerService = Depends(get_script_runner_service),
+):
+    """
+    Create a recurring script schedule.
+    """
+    try:
+        return await script_runner.create_schedule(request)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/schedules/", response_model=List[ScriptSchedule])
+async def list_script_schedules(
+    script_runner: ScriptRunnerService = Depends(get_script_runner_service),
+):
+    """
+    List recurring script schedules.
+    """
+    return await script_runner.list_schedules()
+
+
+@router.delete("/schedules/{schedule_id}")
+async def delete_script_schedule(
+    schedule_id: str,
+    script_runner: ScriptRunnerService = Depends(get_script_runner_service),
+):
+    """
+    Delete a recurring script schedule.
+    """
+    try:
+        return await script_runner.delete_schedule(schedule_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
+
+
+@router.post("/schedules/{schedule_id}/run", response_model=ScriptRunResult)
+async def run_script_schedule_now(
+    schedule_id: str,
+    script_runner: ScriptRunnerService = Depends(get_script_runner_service),
+):
+    """
+    Trigger a scheduled script immediately and store the output in its history.
+    """
+    try:
+        return await script_runner.run_schedule_now(schedule_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/schedules/{schedule_id}/history", response_model=ScriptScheduleHistory)
+async def get_script_schedule_history(
+    schedule_id: str,
+    limit: int = Query(default=50, ge=1, le=50),
+    script_runner: ScriptRunnerService = Depends(get_script_runner_service),
+):
+    """
+    Return up to the latest 50 outputs for a scheduled script.
+    """
+    schedules = await script_runner.list_schedules()
+    if not any(schedule.id == schedule_id for schedule in schedules):
+        raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
+    return ScriptScheduleHistory(schedule_id=schedule_id, runs=await script_runner.get_history(schedule_id, limit))
 
 
 # Script Configuration endpoints (must come before script name routes)
@@ -32,13 +136,19 @@ async def list_script_configs():
         List of script configuration objects with name, script_file_name, and other metadata
     """
     try:
-        config_files = [f for f in fs_util.list_files('conf/scripts') if f.endswith('.yml')]
+        config_files = [
+            *[("conf/scripts", f) for f in _list_files_safe("conf/scripts") if f.endswith((".yml", ".json"))],
+            *[("conf", f) for f in _list_files_safe("conf") if f.endswith((".yml", ".json"))],
+        ]
         configs = []
         
-        for config_file in config_files:
-            config_name = config_file.replace('.yml', '')
+        for config_directory, config_file in config_files:
+            config_name = config_file.rsplit(".", 1)[0]
             try:
-                config = fs_util.read_yaml_file(f"conf/scripts/{config_file}")
+                if config_file.endswith(".json"):
+                    config = json.loads(fs_util.read_file(f"{config_directory}/{config_file}"))
+                else:
+                    config = fs_util.read_yaml_file(f"{config_directory}/{config_file}")
                 configs.append({
                     "config_name": config_name,
                     "script_file_name": config.get("script_file_name", "unknown"),
