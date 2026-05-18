@@ -700,13 +700,14 @@ async def get_24h_volume(
     market_data_service: MarketDataService = Depends(get_market_data_service),
 ):
     """
-    Get 24h volume for a trading pair from a supported exchange.
+    Get 24h volume for trading pairs from a supported exchange.
 
     Args:
-        request: Volume request with exchange name and trading pair
+        request: Volume request with exchange name and trading pairs.
+                 If trading_pairs is empty, returns volume for all available trading pairs.
 
     Returns:
-        24h volume data including base volume, quote volume, and last price
+        24h volume data including base volume, quote volume, and last price for each trading pair
     """
     try:
         response = await market_data_service.get_24h_volume(
