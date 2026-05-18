@@ -1,12 +1,11 @@
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import Dict, List
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends
 from starlette import status
 
 from services.accounts_service import AccountsService
 from deps import get_accounts_service
-from models import PaginatedResponse, GatewayWalletCredential, GatewayWalletInfo
+from models import CredentialDetailsResponse, GatewayWalletCredential
 
 router = APIRouter(tags=["Accounts"], prefix="/accounts")
 
@@ -41,6 +40,31 @@ async def list_account_credentials(account_name: str,
         credentials = accounts_service.list_credentials(account_name)
         # Remove .yml extension from filenames
         return [cred.replace('.yml', '') for cred in credentials]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{account_name}/credentials/details", response_model=List[CredentialDetailsResponse])
+async def list_account_credentials_details(
+    account_name: str,
+    accounts_service: AccountsService = Depends(get_accounts_service),
+):
+    """
+    Get masked connector credential parameters for a specific account.
+
+    Args:
+        account_name: Name of the account to list credential details for
+
+    Returns:
+        List of connector credential details with masked parameter values
+
+    Raises:
+        HTTPException: 404 if account not found
+    """
+    try:
+        return accounts_service.list_credentials_with_details(account_name)
     except HTTPException:
         raise
     except Exception as e:

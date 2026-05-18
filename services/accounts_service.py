@@ -3,7 +3,8 @@ import logging
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Optional, Set
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import HTTPException
 from hummingbot.client.config.config_crypt import ETHKeyFileSecretManger
@@ -14,7 +15,9 @@ from config import settings
 from database import AsyncDatabaseManager, AccountRepository, OrderRepository, TradeRepository, FundingRepository
 from services.gateway_client import GatewayClient
 from services.gateway_transaction_poller import GatewayTransactionPoller
+from utils.credentials import extract_masked_credential_parameters
 from utils.file_system import fs_util
+from utils.security import BackendAPISecurity
 
 # Create module-specific logger
 logger = logging.getLogger(__name__)
@@ -890,6 +893,28 @@ class AccountsService:
                     file.endswith('.yml')]
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
+
+    def list_credentials_with_details(self, account_name: str) -> List[Dict[str, Any]]:
+        """
+        List all connector credential files for an account with masked parameter details.
+
+        :param account_name: The name of the account.
+        :return: List of connector credential details.
+        """
+        credentials = self.list_credentials(account_name)
+        BackendAPISecurity.login_account(account_name=account_name, secrets_manager=self.secrets_manager)
+
+        detailed_credentials = []
+        for credential_file in credentials:
+            connector_name = credential_file.replace('.yml', '')
+            credentials_path = Path(fs_util.get_base_path()) / fs_util.get_connector_keys_path(account_name, connector_name)
+            config_map = BackendAPISecurity.load_connector_config_map_from_file(credentials_path)
+            detailed_credentials.append({
+                "connector_name": connector_name,
+                "parameters": extract_masked_credential_parameters(config_map),
+            })
+
+        return detailed_credentials
 
     async def delete_credentials(self, account_name: str, connector_name: str):
         """

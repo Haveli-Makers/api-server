@@ -1,5 +1,6 @@
+from typing import Any, Dict
+
 from pydantic import BaseModel, Field
-from typing import Dict, Any
 
 
 class LeverageRequest(BaseModel):
@@ -16,3 +17,9 @@ class PositionModeRequest(BaseModel):
 class CredentialRequest(BaseModel):
     """Request model for adding connector credentials"""
     credentials: Dict[str, Any] = Field(description="Connector credentials dictionary")
+
+
+class CredentialDetailsResponse(BaseModel):
+    """Response model for connector credential details."""
+    connector_name: str = Field(description="Connector name")
+    parameters: Dict[str, Any] = Field(description="Masked connector credential parameters")
