@@ -16,6 +16,7 @@ from models import (
 )
 from services.script_runner import ScriptRunnerService
 from utils.file_system import fs_util
+from utils.hummingbot_scripts import get_hummingbot_script_path, get_hummingbot_scripts_path
 
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
 
@@ -30,13 +31,19 @@ def _list_files_safe(directory: str) -> List[str]:
 @router.get("/", response_model=List[str])
 async def list_scripts():
     """
-    List all available scripts.
+    List scripts provided by the imported Hummingbot source checkout.
     
     Returns:
         List of script names (without .py extension)
     """
-    files = _list_files_safe("scripts") + _list_files_safe("strategies")
-    return sorted({f.replace(".py", "") for f in files if f.endswith(".py")})
+    try:
+        return sorted(
+            script_file.stem
+            for script_file in get_hummingbot_scripts_path().iterdir()
+            if script_file.is_file() and script_file.suffix == ".py" and script_file.name != "__init__.py"
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.post("/runs/instant", response_model=ScriptRunResult)
@@ -249,7 +256,7 @@ async def get_script(script_name: str):
         HTTPException: 404 if script not found
     """
     try:
-        content = fs_util.read_file(f"scripts/{script_name}.py")
+        content = get_hummingbot_script_path(script_name).read_text(encoding="utf-8")
         return {
             "name": script_name,
             "content": content
@@ -261,44 +268,23 @@ async def get_script(script_name: str):
 @router.post("/{script_name}", status_code=status.HTTP_201_CREATED)
 async def create_or_update_script(script_name: str, script: Script):
     """
-    Create or update a script.
-    
-    Args:
-        script_name: Name of the script (from URL path)
-        script: Script object with content
-        
-    Returns:
-        Success message when script is saved
-        
-    Raises:
-        HTTPException: 400 if save error occurs
+    Imported Hummingbot scripts are dependency-owned and cannot be edited here.
     """
-    try:
-        fs_util.add_file('scripts', f"{script_name}.py", script.content, override=True)
-        return {"message": f"Script '{script_name}' saved successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail="Scripts are provided by the imported hummingbot installation and are read-only",
+    )
 
 
 @router.delete("/{script_name}")
 async def delete_script(script_name: str):
     """
-    Delete a script.
-    
-    Args:
-        script_name: Name of the script to delete
-        
-    Returns:
-        Success message when script is deleted
-        
-    Raises:
-        HTTPException: 404 if script not found
+    Imported Hummingbot scripts are dependency-owned and cannot be deleted here.
     """
-    try:
-        fs_util.delete_file('scripts', f"{script_name}.py")
-        return {"message": f"Script '{script_name}' deleted successfully"}
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Script '{script_name}' not found")
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail="Scripts are provided by the imported hummingbot installation and are read-only",
+    )
 
 
 @router.get("/{script_name}/config/template", response_model=Dict)
@@ -315,7 +301,13 @@ async def get_script_config_template(script_name: str):
     Raises:
         HTTPException: 404 if script configuration class not found
     """
-    config_class = fs_util.load_script_config_class(script_name)
+    try:
+        config_class = fs_util.load_script_config_class(
+            script_name,
+            script_path=get_hummingbot_script_path(script_name),
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Script '{script_name}' not found")
     if config_class is None:
         raise HTTPException(status_code=404, detail=f"Script configuration class for '{script_name}' not found")
 

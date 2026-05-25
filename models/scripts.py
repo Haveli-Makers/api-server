@@ -39,10 +39,10 @@ class ScriptRunRequest(BaseModel):
     """Request to run a strategy script."""
 
     strategy_name: str = Field(description="Strategy script name without .py extension")
-    config_name: str = Field(description="Configuration file name without extension")
+    config_name: Optional[str] = Field(default=None, description="Optional configuration file name without extension")
     account_name: Optional[str] = Field(default=None, description="Account to pass to the script runner")
     verbose: bool = Field(default=False, description="Enable verbose script output")
-    extra_args: List[str] = Field(default_factory=list, description="Additional CLI arguments for the script runner")
+    extra_args: str = Field(default="", description="Raw CLI argument fragment appended to the script command")
 
 
 class ScriptRunResult(BaseModel):
@@ -50,7 +50,7 @@ class ScriptRunResult(BaseModel):
 
     run_id: str = Field(description="Unique run identifier")
     strategy_name: str
-    config_name: str
+    config_name: Optional[str] = None
     account_name: Optional[str] = None
     started_at: datetime
     completed_at: datetime
@@ -64,12 +64,12 @@ class ScriptScheduleCreate(BaseModel):
 
     name: str = Field(description="Human readable scheduled task name")
     strategy_name: str = Field(description="Strategy script name without .py extension")
-    config_name: str = Field(description="Configuration file name without extension")
+    config_name: Optional[str] = Field(default=None, description="Optional configuration file name without extension")
     account_name: Optional[str] = Field(default=None, description="Account to pass to the script runner")
     interval_value: int = Field(gt=0, description="Positive interval value")
     interval_unit: Literal["minutes", "hours", "weeks"] = Field(description="Interval unit")
     verbose: bool = Field(default=False, description="Enable verbose script output")
-    extra_args: List[str] = Field(default_factory=list, description="Additional CLI arguments for the script runner")
+    extra_args: str = Field(default="", description="Raw CLI argument fragment appended to the script command")
 
 
 class ScriptSchedule(ScriptScheduleCreate):

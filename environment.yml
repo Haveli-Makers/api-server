@@ -19,7 +19,7 @@ dependencies:
   - docker-py
   - pip
   - pip:
-      - hummingbot @ git+https://github.com/Haveli-Makers/hummingbot.git@master
+      - -e /Users/piyush/Desktop/work/trade/hummingbot
       - msgpack>=1.0.5
       - flake8
       - isort

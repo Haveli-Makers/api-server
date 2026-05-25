@@ -45,7 +45,7 @@ class SecuritySettings(BaseSettings):
     
     username: str = Field(default="admin", description="API basic auth username")
     password: str = Field(default="admin", description="API basic auth password")
-    debug_mode: bool = Field(default=False, description="Enable debug mode (disables auth)")
+    debug_mode: bool = Field(default=True, description="Enable debug mode (disables auth)")
     config_password: str = Field(default="a", description="Bot configuration encryption password")
 
     model_config = SettingsConfigDict(

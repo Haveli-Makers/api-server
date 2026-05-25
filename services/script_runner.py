@@ -2,12 +2,14 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from models.scripts import ScriptRunRequest, ScriptRunResult, ScriptSchedule, ScriptScheduleCreate
+from utils.hummingbot_scripts import get_hummingbot_script_path
 
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -76,20 +78,13 @@ class HummingbotSDKScriptBackend:
 
 
 class LocalProcessScriptBackend:
-    """Runs locally available scripts until hummingbot-sdk provides the runner."""
+    """Runs scripts from the imported Hummingbot source until hummingbot-sdk provides the runner."""
 
     def __init__(self, bots_path: str = "bots"):
         self.bots_path = Path(bots_path)
 
     def _script_path(self, strategy_name: str) -> Path:
-        candidates = [
-            self.bots_path / "strategies" / f"{strategy_name}.py",
-            self.bots_path / "scripts" / f"{strategy_name}.py",
-        ]
-        for candidate in candidates:
-            if candidate.exists() and candidate.is_file():
-                return candidate
-        raise FileNotFoundError(f"Strategy script '{strategy_name}' was not found")
+        return get_hummingbot_script_path(strategy_name)
 
     def _config_arg(self, config_name: str) -> str:
         candidates = [
@@ -109,13 +104,15 @@ class LocalProcessScriptBackend:
         started_at = _utc_now()
         run_id = str(uuid.uuid4())
         script_path = self._script_path(request.strategy_name)
-        cmd = ["python3", os.path.relpath(script_path, self.bots_path)]
+        cmd = ["python3", str(script_path)]
         if request.account_name:
             cmd.extend(["--account", request.account_name])
-        cmd.extend(["--config", self._config_arg(request.config_name)])
+        if request.config_name:
+            cmd.extend(["--config", self._config_arg(request.config_name)])
         if request.verbose:
             cmd.append("-vd")
-        cmd.extend(request.extra_args)
+        if request.extra_args:
+            cmd.extend(shlex.split(request.extra_args))
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -171,7 +168,8 @@ class ScriptRunnerService:
 
     async def run_instant(self, request: ScriptRunRequest) -> ScriptRunResult:
         request.strategy_name = _validate_name(request.strategy_name, "strategy_name")
-        request.config_name = _validate_name(request.config_name, "config_name")
+        if request.config_name:
+            request.config_name = _validate_name(request.config_name, "config_name")
         sdk_result = await self.sdk_backend.run(request)
         if sdk_result is not None:
             return sdk_result
@@ -179,7 +177,8 @@ class ScriptRunnerService:
 
     async def create_schedule(self, request: ScriptScheduleCreate) -> ScriptSchedule:
         request.strategy_name = _validate_name(request.strategy_name, "strategy_name")
-        request.config_name = _validate_name(request.config_name, "config_name")
+        if request.config_name:
+            request.config_name = _validate_name(request.config_name, "config_name")
         schedule = ScriptSchedule(
             id=str(uuid.uuid4()),
             created_at=_utc_now(),
