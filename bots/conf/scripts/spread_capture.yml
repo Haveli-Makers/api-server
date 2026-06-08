@@ -1,0 +1,6 @@
+connector_name: coindcx
+data_retention_days: 30
+excluding_pairs: ''
+interval_sec: 60
+quote_token: USDT
+script_file_name: spread_capture
