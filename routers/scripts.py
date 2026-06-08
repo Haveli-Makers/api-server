@@ -1,10 +1,16 @@
 import json
+import time
 import yaml
 from typing import Dict, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from starlette import status
 
+from database.connection import AsyncDatabaseManager
+from database.models import MarketData
+from deps import get_database_manager
 from models import Script, ScriptConfig, SpreadCaptureRunRequest
 from utils.file_system import fs_util
 
@@ -79,10 +85,16 @@ async def list_scripts():
 
 
 @router.post("/spread-capture/run")
-async def run_spread_capture(request: SpreadCaptureRunRequest):
+async def run_spread_capture(
+    request: SpreadCaptureRunRequest,
+    db_manager: AsyncDatabaseManager = Depends(get_database_manager),
+):
     """
-    Save spread_capture config and fetch live spread data from the exchange.
-    Returns the same bid/ask/spread values you see in the Hummingbot CLI logs.
+    Replicates what spread_capture does on each tick:
+    1. Fetches live bid/ask prices from the exchange rate source.
+    2. Stores the results in the MarketData table (with timestamp).
+    3. Applies data-retention cleanup (same as the script).
+    4. Returns the stored rows so you see timestamp + spread data.
     """
     config_data = {
         "script_file_name": "spread_capture",
@@ -112,19 +124,46 @@ async def run_spread_capture(request: SpreadCaptureRunRequest):
         else set()
     )
 
-    market_data = [
+    now_ts = int(time.time())
+
+    rows = [
         {
+            "timestamp": now_ts,
+            "exchange": request.connector_name,
             "trading_pair": pair,
             "best_bid": float(prices["bid"]),
             "best_ask": float(prices["ask"]),
             "mid_price": float(prices["mid"]),
-            "spread_pct": float(prices["spread"]),
+            "spread": round(float(prices["spread"]), 2),
         }
         for pair, prices in bid_ask_prices.items()
         if pair not in excluding
     ]
 
-    return {"status": "success", "config": config_data, "data": market_data}
+    if not rows:
+        raise HTTPException(status_code=404, detail="No market data returned for the given config")
+
+    try:
+        async with db_manager.get_session_context() as session:
+            await session.execute(
+                pg_insert(MarketData).values(rows).on_conflict_do_nothing()
+            )
+            if request.data_retention_days > 0:
+                cutoff = now_ts - request.data_retention_days * 24 * 3600
+                await session.execute(
+                    delete(MarketData).where(
+                        MarketData.exchange == request.connector_name,
+                        MarketData.timestamp < cutoff,
+                    )
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to store market data: {e}")
+
+    return {
+        "status": "success",
+        "config": config_data,
+        "data": rows,
+    }
 
 
 # Script Configuration endpoints (must come before script name routes)
