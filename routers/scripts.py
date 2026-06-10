@@ -1,73 +1,16 @@
 import json
-import time
 import yaml
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from starlette import status
 
 from database.connection import AsyncDatabaseManager
-from database.models import MarketData
 from deps import get_database_manager
-from models import Script, ScriptConfig, SpreadCaptureRunRequest
+from models import Script, SpreadCaptureRunRequest
 from utils.file_system import fs_util
 
-_SUPPORTED_CONNECTORS = [
-    "binance", "binance_perpetual", "binance_us", "kucoin", "gate_io",
-    "mexc", "ascend_ex", "cube", "hyperliquid", "dexalot", "coindcx",
-    "wazirx", "coinswitch",
-]
-
-
-def _get_rate_source(connector_name: str):
-    """Return the appropriate RateSource instance for the given connector."""
-    name = connector_name.lower()
-    if name == "binance":
-        from hummingbot.core.rate_oracle.sources.binance_rate_source import BinanceRateSource
-        return BinanceRateSource()
-    elif name == "binance_perpetual":
-        from hummingbot.core.rate_oracle.sources.binance_rate_source import BinanceRateSource
-        return BinanceRateSource()
-    elif name == "binance_us":
-        from hummingbot.core.rate_oracle.sources.binance_us_rate_source import BinanceUSRateSource
-        return BinanceUSRateSource()
-    elif name == "kucoin":
-        from hummingbot.core.rate_oracle.sources.kucoin_rate_source import KucoinRateSource
-        return KucoinRateSource()
-    elif name == "gate_io":
-        from hummingbot.core.rate_oracle.sources.gate_io_rate_source import GateIoRateSource
-        return GateIoRateSource()
-    elif name == "mexc":
-        from hummingbot.core.rate_oracle.sources.mexc_rate_source import MexcRateSource
-        return MexcRateSource()
-    elif name == "ascend_ex":
-        from hummingbot.core.rate_oracle.sources.ascend_ex_rate_source import AscendExRateSource
-        return AscendExRateSource()
-    elif name == "cube":
-        from hummingbot.core.rate_oracle.sources.cube_rate_source import CubeRateSource
-        return CubeRateSource()
-    elif name == "hyperliquid":
-        from hummingbot.core.rate_oracle.sources.hyperliquid_rate_source import HyperliquidRateSource
-        return HyperliquidRateSource()
-    elif name == "dexalot":
-        from hummingbot.core.rate_oracle.sources.dexalot_rate_source import DexalotRateSource
-        return DexalotRateSource()
-    elif name == "wazirx":
-        from hummingbot.core.rate_oracle.sources.wazirx_rate_source import WazirxRateSource
-        return WazirxRateSource()
-    elif name == "coindcx":
-        from hummingbot.core.rate_oracle.sources.coindcx_rate_source import CoindcxRateSource
-        return CoindcxRateSource()
-    elif name == "coinswitch":
-        from hummingbot.core.rate_oracle.sources.coinswitch_rate_source import CoinswitchRateSource
-        return CoinswitchRateSource()
-    else:
-        raise ValueError(
-            f"Unsupported connector: {connector_name}. "
-            f"Supported: {', '.join(_SUPPORTED_CONNECTORS)}"
-        )
+from hummingbot.scripts.spread_capture import SpreadCapture, SpreadCaptureConfig
 
 
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
@@ -83,88 +26,43 @@ async def list_scripts():
     """
     return [f.replace('.py', '') for f in fs_util.list_files('scripts') if f.endswith('.py')]
 
-
-@router.post("/spread-capture/run")
+@router.post("/spread-capture")
 async def run_spread_capture(
     request: SpreadCaptureRunRequest,
     db_manager: AsyncDatabaseManager = Depends(get_database_manager),
 ):
-    """
-    Replicates what spread_capture does on each tick:
-    1. Fetches live bid/ask prices from the exchange rate source.
-    2. Stores the results in the MarketData table (with timestamp).
-    3. Applies data-retention cleanup (same as the script).
-    4. Returns the stored rows so you see timestamp + spread data.
-    """
-    config_data = {
-        "script_file_name": "spread_capture",
-        "connector_name": request.connector_name,
-        "quote_token": request.quote_token,
-        "interval_sec": request.interval_sec,
-        "excluding_pairs": request.excluding_pairs,
-        "data_retention_days": request.data_retention_days,
-    }
-    try:
-        yaml_content = yaml.dump(config_data, default_flow_style=False)
-        fs_util.add_file("conf/scripts", "spread_capture.yml", yaml_content, override=True)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to save spread_capture config: {e}")
-
-    try:
-        rate_source = _get_rate_source(request.connector_name)
-        bid_ask_prices = await rate_source.get_bid_ask_prices(quote_token=request.quote_token)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch spread data: {e}")
-
-    excluding = (
-        {p.strip().upper() for p in request.excluding_pairs.split(",") if p.strip()}
-        if request.excluding_pairs
-        else set()
+    config = SpreadCaptureConfig(
+        connector_name=request.connector_name,
+        quote_token=request.quote_token,
+        interval_sec=request.interval_sec,
+        excluding_pairs=request.excluding_pairs or "",
+        data_retention_days=request.data_retention_days,
     )
 
-    now_ts = int(time.time())
+    script = SpreadCapture(connectors={}, config=config)
 
-    rows = [
-        {
-            "timestamp": now_ts,
-            "exchange": request.connector_name,
-            "trading_pair": pair,
-            "best_bid": float(prices["bid"]),
-            "best_ask": float(prices["ask"]),
-            "mid_price": float(prices["mid"]),
-            "spread": round(float(prices["spread"]), 2),
-        }
-        for pair, prices in bid_ask_prices.items()
-        if pair not in excluding
-    ]
+    if not script._initialized:
+        raise HTTPException(status_code=400, detail="Script failed to initialize rate source")
 
-    if not rows:
-        raise HTTPException(status_code=404, detail="No market data returned for the given config")
+    captured_rows = []
 
-    try:
-        async with db_manager.get_session_context() as session:
-            await session.execute(
-                pg_insert(MarketData).values(rows).on_conflict_do_nothing()
-            )
-            if request.data_retention_days > 0:
-                cutoff = now_ts - request.data_retention_days * 24 * 3600
-                await session.execute(
-                    delete(MarketData).where(
-                        MarketData.exchange == request.connector_name,
-                        MarketData.timestamp < cutoff,
-                    )
-                )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to store market data: {e}")
+    original_store = script.store_spread_data
+    def capturing_store(market_data_list):
+        captured_rows.extend(market_data_list)
+        original_store(market_data_list)
+
+    script.store_spread_data = capturing_store
+
+    await script.fetch_and_store_spread()
+
+    if not captured_rows:
+        raise HTTPException(status_code=404, detail="No market data returned")
 
     return {
         "status": "success",
-        "config": config_data,
-        "data": rows,
+        "config": config.model_dump(),
+        "data": captured_rows,
     }
-
 
 # Script Configuration endpoints (must come before script name routes)
 @router.get("/configs/", response_model=List[Dict])
