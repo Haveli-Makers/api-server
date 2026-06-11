@@ -32,3 +32,4 @@ class ScriptConfigResponse(BaseModel):
     candles_config: List[Dict[str, Any]] = Field(default=[], description="Candles configuration")
     markets: Dict[str, Any] = Field(default={}, description="Markets configuration")
     error: Optional[str] = Field(None, description="Error message if config is malformed")
+

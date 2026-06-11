@@ -7,7 +7,6 @@ from starlette import status
 
 from utils.file_system import fs_util
 
-
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
 
 
