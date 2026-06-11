@@ -2,15 +2,10 @@ import json
 import yaml
 from typing import Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from starlette import status
 
-from database.connection import AsyncDatabaseManager
-from deps import get_database_manager
-from models import Script, SpreadCaptureRunRequest
 from utils.file_system import fs_util
-
-from hummingbot.scripts.spread_capture import SpreadCapture, SpreadCaptureConfig
 
 
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
@@ -25,44 +20,6 @@ async def list_scripts():
         List of script names (without .py extension)
     """
     return [f.replace('.py', '') for f in fs_util.list_files('scripts') if f.endswith('.py')]
-
-@router.post("/spread-capture")
-async def run_spread_capture(
-    request: SpreadCaptureRunRequest,
-    db_manager: AsyncDatabaseManager = Depends(get_database_manager),
-):
-    config = SpreadCaptureConfig(
-        connector_name=request.connector_name,
-        quote_token=request.quote_token,
-        interval_sec=request.interval_sec,
-        excluding_pairs=request.excluding_pairs or "",
-        data_retention_days=request.data_retention_days,
-    )
-
-    script = SpreadCapture(connectors={}, config=config)
-
-    if not script._initialized:
-        raise HTTPException(status_code=400, detail="Script failed to initialize rate source")
-
-    captured_rows = []
-
-    original_store = script.store_spread_data
-    def capturing_store(market_data_list):
-        captured_rows.extend(market_data_list)
-        original_store(market_data_list)
-
-    script.store_spread_data = capturing_store
-
-    await script.fetch_and_store_spread()
-
-    if not captured_rows:
-        raise HTTPException(status_code=404, detail="No market data returned")
-
-    return {
-        "status": "success",
-        "config": config.model_dump(),
-        "data": captured_rows,
-    }
 
 # Script Configuration endpoints (must come before script name routes)
 @router.get("/configs/", response_model=List[Dict])

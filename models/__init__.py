@@ -60,7 +60,6 @@ from .scripts import (
     ScriptResponse,
     ScriptConfig,
     ScriptConfigResponse,
-    SpreadCaptureRunRequest,
 )
 
 
