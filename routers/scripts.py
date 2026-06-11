@@ -5,6 +5,7 @@ from typing import Dict, List
 from fastapi import APIRouter, HTTPException
 from starlette import status
 
+from models import Script, ScriptConfig
 from utils.file_system import fs_util
 
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
@@ -19,6 +20,7 @@ async def list_scripts():
         List of script names (without .py extension)
     """
     return [f.replace('.py', '') for f in fs_util.list_files('scripts') if f.endswith('.py')]
+
 
 # Script Configuration endpoints (must come before script name routes)
 @router.get("/configs/", response_model=List[Dict])
