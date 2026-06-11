@@ -59,8 +59,7 @@ from .scripts import (
     Script,
     ScriptResponse,
     ScriptConfig,
-    ScriptConfigResponse,
-    SpreadCaptureRunRequest,
+    ScriptConfigResponse,s
 )
 
 
