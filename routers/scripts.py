@@ -10,7 +10,7 @@ from deps import get_database_manager
 from models import Script, SpreadCaptureRunRequest
 from utils.file_system import fs_util
 
-from hummingbot.scripts.spread_capture import SpreadCapture, SpreadCaptureConfig
+from hummingbot.scripts.spread_capture_standalone import SpreadCapture, SpreadCaptureConfig
 
 
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
