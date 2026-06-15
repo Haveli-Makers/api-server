@@ -7,6 +7,8 @@ from starlette import status
 
 from utils.file_system import fs_util
 
+from hummingbot.scripts.spread_capture_standalone import SpreadCapture, SpreadCaptureConfig
+
 
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
 
