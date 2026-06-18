@@ -1,14 +1,22 @@
 import asyncio
+import importlib
+import inspect
 import json
 import os
 import re
 import shlex
+import sys
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Type
 
-from models.scripts import ScriptRunRequest, ScriptRunResult, ScriptSchedule, ScriptScheduleCreate
+import yaml
+
+from hummingbot.client.config.config_data_types import BaseClientModel
+from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
+
+from models.scripts import ScriptProcessRunRequest, ScriptRunResult, ScriptSchedule, ScriptScheduleCreate
 from utils.hummingbot_scripts import get_hummingbot_script_path
 
 
@@ -26,6 +34,8 @@ def _validate_name(value: str, field_name: str) -> str:
 
 
 def _interval_delta(value: int, unit: str) -> timedelta:
+    if unit == "seconds":
+        return timedelta(seconds=value)
     if unit == "minutes":
         return timedelta(minutes=value)
     if unit == "hours":
@@ -38,7 +48,7 @@ def _interval_delta(value: int, unit: str) -> timedelta:
 class HummingbotSDKScriptBackend:
     """Adapter boundary for the external hummingbot-sdk script runner."""
 
-    async def run(self, request: ScriptRunRequest) -> Optional[ScriptRunResult]:
+    async def run(self, request: ScriptProcessRunRequest) -> Optional[ScriptRunResult]:
         try:
             from hummingbot_sdk.scripts import run_script  # type: ignore
         except ImportError:
@@ -100,11 +110,11 @@ class LocalProcessScriptBackend:
                 return os.path.relpath(candidate, self.bots_path)
         return config_name
 
-    async def run(self, request: ScriptRunRequest) -> ScriptRunResult:
+    async def run(self, request: ScriptProcessRunRequest) -> ScriptRunResult:
         started_at = _utc_now()
         run_id = str(uuid.uuid4())
         script_path = self._script_path(request.strategy_name)
-        cmd = ["python3", str(script_path)]
+        cmd = [sys.executable, str(script_path)]
         if request.account_name:
             cmd.extend(["--account", request.account_name])
         if request.config_name:
@@ -139,12 +149,123 @@ class LocalProcessScriptBackend:
         )
 
 
+class ImportableScriptBackend:
+    """Runs importable Hummingbot scripts in-process using their config model."""
+
+    def __init__(self, bots_path: str = "bots"):
+        self.bots_path = Path(bots_path)
+
+    @staticmethod
+    def _normalize_script_name(script_name: str) -> str:
+        return script_name.removesuffix(".py").replace("-", "_")
+
+    def _load_script_module(self, script_name: str):
+        normalized_script_name = self._normalize_script_name(script_name)
+        module_names = [
+            f"hummingbot.scripts.{normalized_script_name}",
+            f"bots.scripts.{normalized_script_name}",
+        ]
+        last_error = None
+        for module_name in module_names:
+            try:
+                return importlib.import_module(module_name)
+            except ModuleNotFoundError as exc:
+                last_error = exc
+        raise FileNotFoundError(f"Script '{script_name}' not found ({last_error})")
+
+    @staticmethod
+    def _get_config_class(script_module) -> Type[BaseClientModel]:
+        for _, cls in inspect.getmembers(script_module, inspect.isclass):
+            if cls.__module__ == script_module.__name__ and issubclass(cls, BaseClientModel) and cls is not BaseClientModel:
+                return cls
+        raise ValueError(f"Script configuration class for '{script_module.__name__}' not found")
+
+    @staticmethod
+    def _get_strategy_class(script_module):
+        for _, cls in inspect.getmembers(script_module, inspect.isclass):
+            if cls.__module__ == script_module.__name__ and issubclass(cls, ScriptStrategyBase) and cls is not ScriptStrategyBase:
+                return cls
+        for _, cls in inspect.getmembers(script_module, inspect.isclass):
+            if cls.__module__ != script_module.__name__:
+                continue
+            if cls.__name__.lower().endswith("config"):
+                continue
+            if any(hasattr(cls, method_name) for method_name in ("run_once", "fetch_and_store_spread")):
+                return cls
+        raise ValueError(f"Runnable script class for '{script_module.__name__}' not found")
+
+    def _config_path(self, config_name: str) -> Path:
+        candidates = [
+            self.bots_path / "conf" / "scripts" / f"{config_name}.yml",
+            self.bots_path / "conf" / "scripts" / f"{config_name}.yaml",
+            self.bots_path / "conf" / "scripts" / f"{config_name}.json",
+            self.bots_path / "conf" / f"{config_name}.yml",
+            self.bots_path / "conf" / f"{config_name}.yaml",
+            self.bots_path / "conf" / f"{config_name}.json",
+        ]
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        raise FileNotFoundError(f"Config '{config_name}' not found")
+
+    def _load_config(self, config_name: Optional[str]) -> Dict:
+        if not config_name:
+            return {}
+        config_path = self._config_path(config_name)
+        if config_path.suffix.lower() == ".json":
+            return json.loads(config_path.read_text(encoding="utf-8"))
+        return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+    @staticmethod
+    async def _run_script_once(script_instance):
+        for method_name in ("run_once", "fetch_and_store_spread"):
+            method = getattr(script_instance, method_name, None)
+            if callable(method):
+                result = method()
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+        raise ValueError("Script does not expose run_once or fetch_and_store_spread")
+
+    async def run(self, request: ScriptProcessRunRequest) -> ScriptRunResult:
+        started_at = _utc_now()
+        run_id = str(uuid.uuid4())
+        try:
+            script_module = self._load_script_module(request.strategy_name)
+            config_class = self._get_config_class(script_module)
+            strategy_class = self._get_strategy_class(script_module)
+            config_data = self._load_config(request.config_name)
+            config = config_class(**config_data)
+            script = strategy_class(connectors={}, config=config)
+            result = await self._run_script_once(script)
+            status = "success"
+            return_code = 0
+            output = json.dumps(result, default=str)
+        except Exception as exc:
+            status = "failed"
+            return_code = 1
+            output = str(exc)
+
+        return ScriptRunResult(
+            run_id=run_id,
+            strategy_name=request.strategy_name,
+            config_name=request.config_name,
+            account_name=request.account_name,
+            started_at=started_at,
+            completed_at=_utc_now(),
+            status=status,
+            output=output,
+            return_code=return_code,
+        )
+
+
 class ScriptRunnerService:
     def __init__(self, storage_path: str = "bots/script_scheduler"):
         self.storage_path = Path(storage_path)
         self.schedules_file = self.storage_path / "schedules.json"
         self.history_path = self.storage_path / "history"
         self.sdk_backend = HummingbotSDKScriptBackend()
+        self.importable_backend = ImportableScriptBackend()
         self.local_backend = LocalProcessScriptBackend()
         self._schedules: Dict[str, ScriptSchedule] = {}
         self._running_schedule_ids: set[str] = set()
@@ -166,13 +287,16 @@ class ScriptRunnerService:
                 pass
         await self._save_schedules()
 
-    async def run_instant(self, request: ScriptRunRequest) -> ScriptRunResult:
+    async def run_instant(self, request: ScriptProcessRunRequest) -> ScriptRunResult:
         request.strategy_name = _validate_name(request.strategy_name, "strategy_name")
         if request.config_name:
             request.config_name = _validate_name(request.config_name, "config_name")
         sdk_result = await self.sdk_backend.run(request)
         if sdk_result is not None:
             return sdk_result
+        importable_result = await self.importable_backend.run(request)
+        if importable_result.status == "success":
+            return importable_result
         return await self.local_backend.run(request)
 
     async def create_schedule(self, request: ScriptScheduleCreate) -> ScriptSchedule:
@@ -223,12 +347,12 @@ class ScriptRunnerService:
             for schedule in schedules:
                 if schedule.enabled and schedule.next_run_at <= now and schedule.id not in self._running_schedule_ids:
                     asyncio.create_task(self._run_schedule(schedule))
-            await asyncio.sleep(30)
+            await asyncio.sleep(1)
 
     async def _run_schedule(self, schedule: ScriptSchedule) -> ScriptRunResult:
         self._running_schedule_ids.add(schedule.id)
         try:
-            request = ScriptRunRequest(
+            request = ScriptProcessRunRequest(
                 strategy_name=schedule.strategy_name,
                 config_name=schedule.config_name,
                 account_name=schedule.account_name,

@@ -1,13 +1,17 @@
+import importlib
+import inspect
 import json
 import yaml
-from typing import Dict, List
+from typing import Any, Dict, List, Optional, Type
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 from starlette import status
 
 from deps import get_script_runner_service
 from models import (
     Script,
+    ScriptProcessRunRequest,
     ScriptRunRequest,
     ScriptRunResult,
     ScriptSchedule,
@@ -17,9 +21,120 @@ from models import (
 from services.script_runner import ScriptRunnerService
 from utils.file_system import fs_util
 from utils.hummingbot_scripts import get_hummingbot_script_path, get_hummingbot_scripts_path
+from hummingbot.client.config.config_data_types import BaseClientModel
+from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
+
 
 router = APIRouter(tags=["Scripts"], prefix="/scripts")
 
+
+def _normalize_script_name(script_name: str) -> str:
+    return script_name.removesuffix(".py").replace("-", "_")
+
+
+def _load_script_module(script_name: str):
+    normalized_script_name = _normalize_script_name(script_name)
+    module_names = [
+        f"hummingbot.scripts.{normalized_script_name}",
+        f"bots.scripts.{normalized_script_name}",
+    ]
+
+    last_error = None
+    for module_name in module_names:
+        try:
+            return importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            last_error = exc
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Script '{script_name}' not found ({last_error})",
+    )
+
+
+def _get_script_config_class(script_module) -> Optional[Type[BaseClientModel]]:
+    for _, cls in inspect.getmembers(script_module, inspect.isclass):
+        if cls.__module__ == script_module.__name__ and issubclass(cls, BaseClientModel) and cls is not BaseClientModel:
+            return cls
+    return None
+
+
+def _get_script_strategy_class(script_module):
+    strategy_classes = []
+    for _, cls in inspect.getmembers(script_module, inspect.isclass):
+        if cls.__module__ != script_module.__name__:
+            continue
+        if inspect.isclass(cls) and issubclass(cls, ScriptStrategyBase) and cls is not ScriptStrategyBase:
+            strategy_classes.append(cls)
+
+    if strategy_classes:
+        return strategy_classes[0]
+
+    for _, cls in inspect.getmembers(script_module, inspect.isclass):
+        if cls.__module__ != script_module.__name__:
+            continue
+        if cls.__name__.lower().endswith("config"):
+            continue
+        if any(hasattr(cls, method_name) for method_name in ("fetch_and_store_spread", "run_once", "on_tick")):
+            return cls
+
+    return None
+
+
+def _serialize_field_prompt(prompt: Any) -> Optional[str]:
+    if prompt is None:
+        return None
+    if callable(prompt):
+        try:
+            return str(prompt(None))
+        except TypeError:
+            return None
+    return str(prompt)
+
+
+def _build_config_template(config_class: Type[BaseClientModel]) -> Dict[str, Dict[str, Any]]:
+    template = {}
+    required_fields = set()
+    try:
+        required_fields = set(config_class.model_json_schema().get("required", []))
+    except Exception:
+        required_fields = set()
+
+    for field_name, field in config_class.model_fields.items():
+        extra = field.json_schema_extra or {}
+        default_factory = getattr(field, "default_factory", None)
+        if callable(default_factory):
+            default_value = default_factory()
+        else:
+            default_value = None if field.is_required() else field.default
+        field_info = {
+            "default": default_value,
+            "required": field_name in required_fields,
+            "annotation": str(field.annotation),
+        }
+        if field.description:
+            field_info["description"] = field.description
+        prompt = _serialize_field_prompt(extra.get("prompt"))
+        if prompt:
+            field_info["prompt"] = prompt
+        template[field_name] = field_info
+
+    return json.loads(json.dumps(template, default=str))
+
+
+async def _run_script_once(script_instance):
+    for method_name in ("run_once", "fetch_and_store_spread"):
+        method = getattr(script_instance, method_name, None)
+        if callable(method):
+            result = method()
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+    raise HTTPException(
+        status_code=400,
+        detail="Script does not expose a supported one-shot run method",
+    )
 
 def _list_files_safe(directory: str) -> List[str]:
     try:
@@ -36,19 +151,12 @@ async def list_scripts():
     Returns:
         List of script names (without .py extension)
     """
-    try:
-        return sorted(
-            script_file.stem
-            for script_file in get_hummingbot_scripts_path().iterdir()
-            if script_file.is_file() and script_file.suffix == ".py" and script_file.name != "__init__.py"
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    return [f.replace('.py', '') for f in fs_util.list_files('scripts') if f.endswith('.py')]
 
 
 @router.post("/runs/instant", response_model=ScriptRunResult)
 async def run_script_instant(
-    request: ScriptRunRequest,
+    request: ScriptProcessRunRequest,
     script_runner: ScriptRunnerService = Depends(get_script_runner_service),
 ):
     """
@@ -99,6 +207,61 @@ async def delete_script_schedule(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
 
+@router.post(
+    "/run",
+    responses={
+        400: {"description": "Invalid script run request or script initialization failure"},
+        404: {"description": "Script, config class, or runnable class not found"},
+        422: {"description": "Invalid script configuration"},
+    },
+)
+async def run_script(
+    request: ScriptRunRequest,
+):
+    script_module = _load_script_module(request.script_name)
+    config_class = _get_script_config_class(script_module)
+    if config_class is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Script configuration class for '{request.script_name}' not found",
+        )
+
+    config_template = _build_config_template(config_class)
+    if not request.config:
+        return {
+            "status": "requires_config",
+            "script_name": _normalize_script_name(request.script_name),
+            "config": config_template,
+        }
+
+    try:
+        config = config_class(**request.config)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Invalid script config",
+                "errors": exc.errors(),
+                "config": config_template,
+            },
+        )
+    strategy_class = _get_script_strategy_class(script_module)
+    if strategy_class is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Runnable script class for '{request.script_name}' not found",
+        )
+
+    normalized_script_name = _normalize_script_name(request.script_name)
+    script = strategy_class(connectors={}, config=config)
+    result = await _run_script_once(script)
+
+    return {
+        "status": "success",
+        "script_name": normalized_script_name,
+        "config": config.model_dump(),
+        "result": result,
+    }
 
 @router.post("/schedules/{schedule_id}/run", response_model=ScriptRunResult)
 async def run_script_schedule_now(
