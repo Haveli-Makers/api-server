@@ -1,7 +1,7 @@
 import asyncio
 import time
 
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException, Depends, Query
 from hummingbot.data_feed.candles_feed.data_types import HistoricalCandlesConfig, CandlesConfig
 from hummingbot.data_feed.candles_feed.candles_factory import CandlesFactory
 
@@ -484,6 +484,7 @@ async def get_spread_averages(
 async def get_spread_data(
     connector_name: str,
     trading_pair: str,
+    limit: int = Query(default=100, ge=1, le=100000),
     market_data_service: MarketDataService = Depends(get_market_data_service)
 ):
     """
@@ -505,7 +506,7 @@ async def get_spread_data(
         result = await market_data_service.get_spread_data(
             pair=trading_pair,
             connector=connector_name,
-            limit=100
+            limit=limit
         )
         
         return result
