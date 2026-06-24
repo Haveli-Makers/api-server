@@ -1,6 +1,6 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from starlette import status
 
 from services.accounts_service import AccountsService
@@ -138,7 +138,18 @@ async def delete_credential(account_name: str, connector_name: str, accounts_ser
 
 
 @router.post("/add-credential/{account_name}/{connector_name}", status_code=status.HTTP_201_CREATED)
-async def add_credential(account_name: str, connector_name: str, credentials: Dict, accounts_service: AccountsService = Depends(get_accounts_service)):
+async def add_credential(
+    account_name: str,
+    connector_name: str,
+    credentials: Dict,
+    alias: Optional[str] = Query(
+        default=None,
+        description=(
+            "Custom name to store these credentials under (e.g. 'binance_sub_1234'). "
+        ),
+    ),
+    accounts_service: AccountsService = Depends(get_accounts_service),
+):
     """
     Add or update connector credentials (API keys) for a specific account and connector.
 
@@ -146,6 +157,7 @@ async def add_credential(account_name: str, connector_name: str, credentials: Di
         account_name: Name of the account
         connector_name: Name of the connector
         credentials: Dictionary containing the connector credentials
+        alias: Optional custom storage name (e.g. 'binance_sub_1234')
 
     Returns:
         Success message when credentials are added
@@ -153,11 +165,12 @@ async def add_credential(account_name: str, connector_name: str, credentials: Di
     Raises:
         HTTPException: 400 if there's an error adding the credentials
     """
+    cache_key = alias or connector_name
     try:
-        await accounts_service.add_credentials(account_name, connector_name, credentials)
+        await accounts_service.add_credentials(account_name, connector_name, credentials, alias=alias)
         return {"message": "Connector credentials added successfully."}
     except Exception as e:
-        await accounts_service.delete_credentials(account_name, connector_name)
+        await accounts_service.delete_credentials(account_name, cache_key)
         raise HTTPException(status_code=400, detail=str(e))
 
 

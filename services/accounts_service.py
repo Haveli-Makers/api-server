@@ -851,26 +851,36 @@ class AccountsService:
         from services.unified_connector_service import UnifiedConnectorService
         return UnifiedConnectorService.get_connector_config_map(connector_name)
 
-    async def add_credentials(self, account_name: str, connector_name: str, credentials: dict):
+    async def add_credentials(
+        self,
+        account_name: str,
+        connector_name: str,
+        credentials: dict,
+        alias: Optional[str] = None,
+    ):
         """
         Add or update connector credentials and initialize the connector with validation.
 
         :param account_name: The name of the account.
         :param connector_name: The name of the connector.
         :param credentials: Dictionary containing the connector credentials.
+        :param alias: Optional custom name to store credentials under (e.g. 'binance_sub_1234').
+                      When provided both master and sub-account credentials for the same connector
+                      can coexist within a single account.
         :raises Exception: If credentials are invalid or connector cannot be initialized.
         """
         if not self._connector_service:
             raise HTTPException(status_code=500, detail="Connector service not initialized")
 
+        cache_key = alias or connector_name
         try:
-            # Update the connector keys (this saves the credentials to file and validates them)
-            connector = await self._connector_service.update_connector_keys(account_name, connector_name, credentials)
-
+            connector = await self._connector_service.update_connector_keys(
+                account_name, connector_name, credentials, alias=alias
+            )
             await self.update_account_state()
         except Exception as e:
             logger.error(f"Error adding connector credentials for account {account_name}: {e}")
-            await self.delete_credentials(account_name, connector_name)
+            await self.delete_credentials(account_name, cache_key)
             raise e
 
     @staticmethod
@@ -909,9 +919,16 @@ class AccountsService:
             connector_name = credential_file.replace('.yml', '')
             credentials_path = Path(fs_util.get_base_path()) / fs_util.get_connector_keys_path(account_name, connector_name)
             config_map = BackendAPISecurity.load_connector_config_map_from_file(credentials_path)
+
+            # Determine alias and type
+            alias = connector_name if connector_name != connector_name.split("_")[0] else None
+            credential_type = "Sub-account" if alias else "Master"
+
             detailed_credentials.append({
                 "connector_name": connector_name,
                 "parameters": extract_masked_credential_parameters(config_map),
+                "alias": alias,
+                "credential_type": credential_type,
             })
 
         return detailed_credentials
