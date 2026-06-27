@@ -7,6 +7,7 @@ from services.unified_connector_service import UnifiedConnectorService
 from services.market_data_service import MarketDataService
 from services.trading_service import TradingService
 from services.executor_service import ExecutorService
+from services.script_runner import ScriptRunnerService
 from utils.bot_archiver import BotArchiver
 from database import AsyncDatabaseManager
 
@@ -49,6 +50,11 @@ def get_trading_service(request: Request) -> TradingService:
 def get_executor_service(request: Request) -> ExecutorService:
     """Get ExecutorService from app state."""
     return request.app.state.executor_service
+
+
+def get_script_runner_service(request: Request) -> ScriptRunnerService:
+    """Get ScriptRunnerService from app state."""
+    return request.app.state.script_runner_service
 
 
 def get_bot_archiver(request: Request) -> BotArchiver:

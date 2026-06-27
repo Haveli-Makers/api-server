@@ -15,6 +15,7 @@ from docker.types import LogConfig
 from config import settings
 from models import V2ScriptDeployment
 from utils.file_system import fs_util
+from utils.hummingbot_scripts import get_hummingbot_scripts_path
 
 
 class DockerService:
@@ -163,6 +164,7 @@ class DockerService:
 
     def create_hummingbot_instance(self, config: V2ScriptDeployment):
         bots_path = os.environ.get('BOTS_PATH', self.SOURCE_PATH)  # Default to 'SOURCE_PATH' if BOTS_PATH is not set
+        hummingbot_scripts_path = str(get_hummingbot_scripts_path())
         instance_name = config.instance_name
         instance_dir = os.path.join("bots", 'instances', instance_name)
         if not os.path.exists(instance_dir):
@@ -236,7 +238,7 @@ class DockerService:
             os.path.abspath(os.path.join(bots_path, instance_dir, 'conf', 'controllers')): {'bind': '/home/hummingbot/conf/controllers', 'mode': 'rw'},
             os.path.abspath(os.path.join(bots_path, instance_dir, 'data')): {'bind': '/home/hummingbot/data', 'mode': 'rw'},
             os.path.abspath(os.path.join(bots_path, instance_dir, 'logs')): {'bind': '/home/hummingbot/logs', 'mode': 'rw'},
-            os.path.abspath(os.path.join(bots_path, "bots", 'scripts')): {'bind': '/home/hummingbot/scripts', 'mode': 'rw'},
+            hummingbot_scripts_path: {'bind': '/home/hummingbot/scripts', 'mode': 'ro'},
             os.path.abspath(os.path.join(bots_path, "bots", 'controllers')): {'bind': '/home/hummingbot/controllers', 'mode': 'rw'},
         }
 
