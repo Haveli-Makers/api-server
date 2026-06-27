@@ -17,6 +17,12 @@ class PositionModeRequest(BaseModel):
 class CredentialRequest(BaseModel):
     """Request model for adding connector credentials"""
     credentials: Dict[str, Any] = Field(description="Connector credentials dictionary")
+    encrypted: bool = Field(
+        default=False,
+        description=(
+            "If True, all string values in credentials are RSA-OAEP encrypted and base64-encoded. "
+        ),
+    )
 
 
 class CredentialDetailsResponse(BaseModel):
