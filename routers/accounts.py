@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from starlette import status
@@ -160,7 +160,7 @@ async def get_public_key():
 async def add_credential(
     account_name: str,
     connector_name: str,
-    credentials: Dict,
+    request: CredentialRequest,
     alias: Optional[str] = Query(
         default=None,
         description=(
@@ -179,7 +179,7 @@ async def add_credential(
     Args:
         account_name: Name of the account
         connector_name: Name of the connector
-        credentials: Dictionary containing the connector credentials
+        request: CredentialRequest containing credentials dict and encrypted flag
         alias: Optional custom storage name (e.g. 'binance_sub_1234')
 
     Returns:
@@ -190,6 +190,7 @@ async def add_credential(
     """
     cache_key = alias or connector_name
     try:
+        credentials = decrypt_credentials(request.credentials) if request.encrypted else request.credentials
         await accounts_service.add_credentials(account_name, connector_name, credentials, alias=alias)
         return {"message": "Connector credentials added successfully."}
     except ValueError as e:
