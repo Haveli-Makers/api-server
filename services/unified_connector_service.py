@@ -613,18 +613,50 @@ class UnifiedConnectorService:
         logger.info(f"Initialized trading connector {connector_name} for {account_name}")
         return connector
 
+    def _get_base_connector_name(self, account_name: str, connector_name: str) -> str:
+        """Return the real Hummingbot connector name for a given name or alias.
+
+        When connector_name is a valid Hummingbot connector it is returned as-is.
+        For aliases (e.g. 'binance_sub_1234') the method reads the decrypted config
+        cache to find the underlying connector type (e.g. 'binance').
+        """
+        if connector_name in self._conn_settings:
+            return connector_name
+
+        config = BackendAPISecurity._secure_configs.get(connector_name)
+        if config is not None and hasattr(config, "connector"):
+            return config.connector
+
+        try:
+            from pathlib import Path
+            from hummingbot.client.config.config_helpers import connector_name_from_file
+            yml_path = Path(fs_util.base_path) / fs_util.get_connector_keys_path(account_name, connector_name)
+            if yml_path.exists():
+                return connector_name_from_file(yml_path)
+        except Exception:
+            pass
+
+        return connector_name
+
     def _create_trading_connector(
         self,
         account_name: str,
         connector_name: str
     ) -> ConnectorBase:
-        """Create a trading connector with API keys."""
+        """Create a trading connector with API keys.
+
+        connector_name may be an alias (e.g. 'binance_sub_1234').  The base
+        Hummingbot connector type is resolved via _get_base_connector_name so
+        that the correct class and settings are used while credentials are still
+        loaded from the alias-keyed entry in the secure-configs cache.
+        """
         BackendAPISecurity.login_account(
             account_name=account_name,
             secrets_manager=self.secrets_manager
         )
 
-        conn_setting = self._conn_settings[connector_name]
+        base_name = self._get_base_connector_name(account_name, connector_name)
+        conn_setting = self._conn_settings[base_name]
         keys = BackendAPISecurity.api_keys(connector_name)
 
         init_params = conn_setting.conn_init_parameters(
@@ -633,7 +665,7 @@ class UnifiedConnectorService:
             api_keys=keys,
         )
 
-        connector_class = get_connector_class(connector_name)
+        connector_class = get_connector_class(base_name)
         return connector_class(**init_params)
 
     def _create_data_connector(self, connector_name: str) -> ConnectorBase:
@@ -989,9 +1021,21 @@ class UnifiedConnectorService:
         self,
         account_name: str,
         connector_name: str,
-        keys: dict
+        keys: dict,
+        alias: Optional[str] = None,
     ) -> ConnectorBase:
-        """Update API keys and recreate connector."""
+        """Update API keys and recreate connector.
+
+        Args:
+            account_name: The account name.
+            connector_name: The real Hummingbot connector (e.g. 'binance').
+            keys: Credential key/value pairs.
+            alias: Optional custom name to store the credentials under (e.g.
+                   'binance_sub_1234').  When provided the credentials are saved
+                   under this alias filename and the connector is cached under
+                   the alias key so that both master and sub-account instances
+                   can coexist for the same connector type.
+        """
         if not BackendAPISecurity.login_account(
             account_name=account_name,
             secrets_manager=self.secrets_manager
@@ -1005,14 +1049,19 @@ class UnifiedConnectorService:
         for key, value in keys.items():
             setattr(connector_config, key, value)
 
-        BackendAPISecurity.update_connector_keys(account_name, connector_config)
+        cache_key = alias or connector_name
+        if alias and alias != connector_name:
+            BackendAPISecurity.update_connector_keys_with_alias(account_name, connector_config, alias)
+        else:
+            BackendAPISecurity.update_connector_keys(account_name, connector_config)
+
         BackendAPISecurity.decrypt_all(account_name=account_name)
 
         # Properly stop old connector (stops recorders, network tasks, cleans up caches)
-        await self.stop_trading_connector(account_name, connector_name)
+        await self.stop_trading_connector(account_name, cache_key)
 
         # Create new connector with fresh recorders
-        return await self.get_trading_connector(account_name, connector_name)
+        return await self.get_trading_connector(account_name, cache_key)
 
     def clear_trading_connector(
         self,
