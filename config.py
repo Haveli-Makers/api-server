@@ -45,8 +45,13 @@ class SecuritySettings(BaseSettings):
     
     username: str = Field(default="admin", description="API basic auth username")
     password: str = Field(default="admin", description="API basic auth password")
+    user_username: str = Field(default="", description="API user role username")
+    user_password: str = Field(default="", description="API user role password")
     debug_mode: bool = Field(default=False, description="Enable debug mode (disables auth)")
     config_password: str = Field(default="a", description="Bot configuration encryption password")
+    jwt_secret_key: str = Field(default="change-me", description="Secret key used to sign JWT access tokens")
+    jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
+    jwt_access_token_expire_minutes: int = Field(default=60, description="JWT access token lifetime in minutes")
 
     model_config = SettingsConfigDict(
         env_prefix="",
