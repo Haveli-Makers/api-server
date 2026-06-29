@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse
 from hummingbot.data_feed.market_data_provider import MarketDataProvider
 from hummingbot.client.config.config_crypt import ETHKeyFileSecretManger
 
+from middleware.api_logger import APILoggingMiddleware
 from utils.security import BackendAPISecurity
 from services.bots_orchestrator import BotsOrchestrator
 from services.accounts_service import AccountsService
@@ -304,6 +305,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Log every API call and response to the database
+app.add_middleware(APILoggingMiddleware)
 
 
 @app.exception_handler(RequestValidationError)
