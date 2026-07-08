@@ -920,8 +920,8 @@ class AccountsService:
             credentials_path = Path(fs_util.get_base_path()) / fs_util.get_connector_keys_path(account_name, connector_name)
             config_map = BackendAPISecurity.load_connector_config_map_from_file(credentials_path)
 
-            # Determine alias and type
-            alias = connector_name if connector_name != connector_name.split("_")[0] else None
+            base_connector_name = config_map.connector
+            alias = connector_name if connector_name != base_connector_name else None
             credential_type = "Sub-account" if alias else "Master"
 
             detailed_credentials.append({

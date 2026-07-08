@@ -633,10 +633,17 @@ class UnifiedConnectorService:
             yml_path = Path(fs_util.base_path) / fs_util.get_connector_keys_path(account_name, connector_name)
             if yml_path.exists():
                 return connector_name_from_file(yml_path)
-        except Exception:
-            pass
+        except Exception as e:
+            raise ValueError(
+                f"Could not resolve base connector type for '{connector_name}' "
+                f"(account '{account_name}'): credential file is unreadable or malformed ({e})"
+            ) from e
 
-        return connector_name
+        raise ValueError(
+            f"Could not resolve base connector type for '{connector_name}' "
+            f"(account '{account_name}'): no matching connector settings, cached "
+            f"config, or credential file found"
+        )
 
     def _create_trading_connector(
         self,
