@@ -194,6 +194,16 @@ class ImportableScriptBackend:
                 return cls
         raise ValueError(f"Runnable script class for '{script_module.__name__}' not found")
 
+    @staticmethod
+    def _instantiate_strategy(strategy_class: Type, config: BaseClientModel):
+        params = inspect.signature(strategy_class.__init__).parameters
+        kwargs = {}
+        if "config" in params:
+            kwargs["config"] = config
+        if "connectors" in params:
+            kwargs["connectors"] = {}
+        return strategy_class(**kwargs)
+
     def _config_path(self, config_name: str) -> Path:
         candidates = [
             self.bots_path / "conf" / "scripts" / f"{config_name}.yml",
@@ -236,7 +246,7 @@ class ImportableScriptBackend:
             strategy_class = self._get_strategy_class(script_module)
             config_data = self._load_config(request.config_name)
             config = config_class(**config_data)
-            script = strategy_class(connectors={}, config=config)
+            script = self._instantiate_strategy(strategy_class, config)
             result = await self._run_script_once(script)
             status = "success"
             return_code = 0

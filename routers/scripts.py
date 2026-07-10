@@ -20,7 +20,11 @@ from models import (
 )
 from services.script_runner import ScriptRunnerService
 from utils.file_system import fs_util
-from utils.hummingbot_scripts import get_hummingbot_script_path, get_hummingbot_scripts_path
+from utils.hummingbot_scripts import (
+    get_hummingbot_bundled_scripts_path,
+    get_hummingbot_script_path,
+    get_hummingbot_scripts_path,
+)
 from hummingbot.client.config.config_data_types import BaseClientModel
 from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
 
@@ -122,6 +126,16 @@ def _build_config_template(config_class: Type[BaseClientModel]) -> Dict[str, Dic
     return json.loads(json.dumps(template, default=str))
 
 
+def _instantiate_strategy(strategy_class: type, config: BaseClientModel):
+    params = inspect.signature(strategy_class.__init__).parameters
+    kwargs = {}
+    if "config" in params:
+        kwargs["config"] = config
+    if "connectors" in params:
+        kwargs["connectors"] = {}
+    return strategy_class(**kwargs)
+
+
 async def _run_script_once(script_instance):
     for method_name in ("run_once", "fetch_and_store_spread"):
         method = getattr(script_instance, method_name, None)
@@ -146,12 +160,18 @@ def _list_files_safe(directory: str) -> List[str]:
 @router.get("/", response_model=List[str])
 async def list_scripts():
     """
-    List scripts provided by the imported Hummingbot source checkout.
-    
+    List scripts bundled in the imported hummingbot.scripts package.
+
     Returns:
         List of script names (without .py extension)
     """
-    return [f.replace('.py', '') for f in fs_util.list_files('scripts') if f.endswith('.py')]
+    try:
+        scripts_path = get_hummingbot_bundled_scripts_path()
+    except FileNotFoundError:
+        return []
+    return sorted(
+        f.stem for f in scripts_path.glob("*.py") if f.name != "__init__.py"
+    )
 
 
 @router.post("/runs/instant", response_model=ScriptRunResult)
@@ -253,7 +273,7 @@ async def run_script(
         )
 
     normalized_script_name = _normalize_script_name(request.script_name)
-    script = strategy_class(connectors={}, config=config)
+    script = _instantiate_strategy(strategy_class, config)
     result = await _run_script_once(script)
 
     return {

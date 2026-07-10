@@ -1,6 +1,24 @@
+import importlib
 from pathlib import Path
 
 import hummingbot
+
+
+def get_hummingbot_bundled_scripts_path() -> Path:
+    """
+    Return the ``hummingbot.scripts`` package directory.
+    """
+    try:
+        scripts_module = importlib.import_module("hummingbot.scripts")
+    except ModuleNotFoundError as exc:
+        raise FileNotFoundError(
+            "The imported hummingbot distribution does not expose a 'hummingbot.scripts' package."
+        ) from exc
+
+    scripts_path = Path(scripts_module.__file__).resolve().parent
+    if not scripts_path.is_dir():
+        raise FileNotFoundError("The 'hummingbot.scripts' package directory could not be located.")
+    return scripts_path
 
 
 def get_hummingbot_scripts_path() -> Path:
