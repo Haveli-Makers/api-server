@@ -931,14 +931,20 @@ class MarketDataService:
                     connector=connector,
                     limit=limit
                 )
-                
+
                 # Convert to dictionaries
                 data = [orderbook_repo.to_dict(sample) for sample in samples]
-                
-                logger.debug(f"Retrieved {len(data)} spread samples")
+
+                total_count = await orderbook_repo.count_spread_samples(
+                    pair=pair,
+                    connector=connector
+                )
+
+                logger.debug(f"Retrieved {len(data)} of {total_count} spread samples")
                 return {
                     "data": data,
-                    "count": len(data)
+                    "count": len(data),
+                    "total_count": total_count
                 }
                 
         except Exception as e:
