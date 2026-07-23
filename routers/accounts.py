@@ -1,6 +1,6 @@
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from starlette import status
 
 from services.accounts_service import AccountsService
@@ -160,7 +160,13 @@ async def get_public_key():
 async def add_credential(
     account_name: str,
     connector_name: str,
-    body: CredentialRequest,
+    request: CredentialRequest,
+    alias: Optional[str] = Query(
+        default=None,
+        description=(
+            "Custom name to store these credentials under (e.g. 'binance_sub_1234'). "
+        ),
+    ),
     accounts_service: AccountsService = Depends(get_accounts_service),
 ):
     """
@@ -173,7 +179,8 @@ async def add_credential(
     Args:
         account_name: Name of the account
         connector_name: Name of the connector
-        body: CredentialRequest containing credentials dict and optional encrypted flag
+        request: CredentialRequest containing credentials dict and encrypted flag
+        alias: Optional custom storage name (e.g. 'binance_sub_1234')
 
     Returns:
         Success message when credentials are added
@@ -181,14 +188,15 @@ async def add_credential(
     Raises:
         HTTPException: 400 if credentials are invalid or decryption fails
     """
+    cache_key = alias or connector_name
     try:
-        credentials = decrypt_credentials(body.credentials) if body.encrypted else body.credentials
-        await accounts_service.add_credentials(account_name, connector_name, credentials)
+        credentials = decrypt_credentials(request.credentials) if request.encrypted else request.credentials
+        await accounts_service.add_credentials(account_name, connector_name, credentials, alias=alias)
         return {"message": "Connector credentials added successfully."}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Credential decryption failed: {e}")
     except Exception as e:
-        await accounts_service.delete_credentials(account_name, connector_name)
+        await accounts_service.delete_credentials(account_name, cache_key)
         raise HTTPException(status_code=400, detail=str(e))
 
 
