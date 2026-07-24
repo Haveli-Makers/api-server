@@ -943,7 +943,7 @@ class AccountsService:
             credential_type = "Sub-account" if alias else "Master"
 
             detailed_credentials.append({
-                "connector_name": connector_name,
+                "connector_name": base_connector_name,
                 "parameters": extract_masked_credential_parameters(config_map),
                 "alias": alias,
                 "credential_type": credential_type,

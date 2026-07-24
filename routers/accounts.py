@@ -1,11 +1,12 @@
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from starlette import status
 
 from services.accounts_service import AccountsService
 from deps import get_accounts_service
-from models import CredentialDetailsResponse, GatewayWalletCredential
+from models import CredentialDetailsResponse, GatewayWalletCredential, CredentialRequest
+from utils.rsa_encryption import get_public_key_pem, decrypt_credentials
 
 router = APIRouter(tags=["Accounts"], prefix="/accounts")
 
@@ -146,11 +147,29 @@ async def delete_credential(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/public-key")
+async def get_public_key():
+    """
+    Get the server RSA public key (PEM format) for encrypting connector credentials.
+
+    Use this key to encrypt sensitive credential values (api_key, secret, etc.)
+    with RSA-OAEP/SHA-256 before sending them to add-credential.
+    Each value must be individually encrypted and then base64-encoded.
+
+    Returns:
+        RSA public key in PEM format
+    """
+    try:
+        return {"public_key": get_public_key_pem()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/add-credential/{account_name}/{connector_name}", status_code=status.HTTP_201_CREATED)
 async def add_credential(
     account_name: str,
     connector_name: str,
-    credentials: Dict,
+    request: CredentialRequest,
     alias: Optional[str] = Query(
         default=None,
         description=(
@@ -162,22 +181,29 @@ async def add_credential(
     """
     Add or update connector credentials (API keys) for a specific account and connector.
 
+    Supports plaintext and RSA-encrypted credential values.
+    When encrypted=True, each string value in credentials must be RSA-OAEP/SHA-256
+    encrypted with the server public key (from GET /accounts/public-key) and base64-encoded.
+
     Args:
         account_name: Name of the account
         connector_name: Name of the connector
-        credentials: Dictionary containing the connector credentials
+        request: CredentialRequest containing credentials dict and encrypted flag
         alias: Optional custom storage name (e.g. 'binance_sub_1234')
 
     Returns:
         Success message when credentials are added
 
     Raises:
-        HTTPException: 400 if there's an error adding the credentials
+        HTTPException: 400 if credentials are invalid or decryption fails
     """
     cache_key = f"{connector_name}__{alias}" if alias else connector_name
     try:
+        credentials = decrypt_credentials(request.credentials) if request.encrypted else request.credentials
         await accounts_service.add_credentials(account_name, connector_name, credentials, alias=alias)
         return {"message": "Connector credentials added successfully."}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Credential decryption failed: {e}")
     except Exception as e:
         await accounts_service.delete_credentials(account_name, cache_key)
         raise HTTPException(status_code=400, detail=str(e))
