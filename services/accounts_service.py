@@ -27,9 +27,6 @@ def _credential_storage_key(connector_name: str, alias: Optional[str]) -> str:
     """Build the on-disk storage key for a credential file.
 
     Namespacing the alias under the connector name (e.g. 'wazirx__sub_account_1')
-    lets the same alias be reused across different connectors within one account,
-    since credential files previously collided when only the bare alias was used
-    as the filename.
     """
     return f"{connector_name}__{alias}" if alias else connector_name
 
@@ -938,7 +935,6 @@ class AccountsService:
             elif storage_key.startswith(connector_prefix):
                 alias = storage_key[len(connector_prefix):]
             else:
-                # Legacy sub-account file saved before aliases were namespaced per connector.
                 alias = storage_key
             credential_type = "Sub-account" if alias else "Master"
 

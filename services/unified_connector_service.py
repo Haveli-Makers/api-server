@@ -1056,8 +1056,6 @@ class UnifiedConnectorService:
         for key, value in keys.items():
             setattr(connector_config, key, value)
 
-        # Namespace the alias under the connector name (e.g. 'wazirx__sub_account_1')
-        # so the same alias text can be reused across different connectors in one account.
         cache_key = f"{connector_name}__{alias}" if alias else connector_name
         if alias:
             BackendAPISecurity.update_connector_keys_with_alias(account_name, connector_config, cache_key)
