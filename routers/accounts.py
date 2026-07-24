@@ -117,22 +117,31 @@ async def delete_account(account_name: str, accounts_service: AccountsService = 
 
 
 @router.post("/delete-credential/{account_name}/{connector_name}")
-async def delete_credential(account_name: str, connector_name: str, accounts_service: AccountsService = Depends(get_accounts_service)):
+async def delete_credential(
+    account_name: str,
+    connector_name: str,
+    alias: Optional[str] = Query(
+        default=None,
+        description="Alias of the sub-account credential to delete, if applicable.",
+    ),
+    accounts_service: AccountsService = Depends(get_accounts_service),
+):
     """
     Delete a specific connector credential for an account.
-    
+
     Args:
         account_name: Name of the account
         connector_name: Name of the connector to delete credentials for
-        
+        alias: Optional alias, when deleting a sub-account credential
+
     Returns:
         Success message when credential is deleted
-        
+
     Raises:
         HTTPException: 404 if credential not found
     """
     try:
-        await accounts_service.delete_credentials(account_name, connector_name)
+        await accounts_service.delete_credentials(account_name, connector_name, alias=alias)
         return {"message": "Credential deleted successfully."}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -188,7 +197,7 @@ async def add_credential(
     Raises:
         HTTPException: 400 if credentials are invalid or decryption fails
     """
-    cache_key = alias or connector_name
+    cache_key = f"{connector_name}__{alias}" if alias else connector_name
     try:
         credentials = decrypt_credentials(request.credentials) if request.encrypted else request.credentials
         await accounts_service.add_credentials(account_name, connector_name, credentials, alias=alias)

@@ -1056,9 +1056,9 @@ class UnifiedConnectorService:
         for key, value in keys.items():
             setattr(connector_config, key, value)
 
-        cache_key = alias or connector_name
-        if alias and alias != connector_name:
-            BackendAPISecurity.update_connector_keys_with_alias(account_name, connector_config, alias)
+        cache_key = f"{connector_name}__{alias}" if alias else connector_name
+        if alias:
+            BackendAPISecurity.update_connector_keys_with_alias(account_name, connector_config, cache_key)
         else:
             BackendAPISecurity.update_connector_keys(account_name, connector_config)
 
