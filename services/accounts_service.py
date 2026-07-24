@@ -23,6 +23,17 @@ from utils.security import BackendAPISecurity
 logger = logging.getLogger(__name__)
 
 
+def _credential_storage_key(connector_name: str, alias: Optional[str]) -> str:
+    """Build the on-disk storage key for a credential file.
+
+    Namespacing the alias under the connector name (e.g. 'wazirx__sub_account_1')
+    lets the same alias be reused across different connectors within one account,
+    since credential files previously collided when only the bare alias was used
+    as the filename.
+    """
+    return f"{connector_name}__{alias}" if alias else connector_name
+
+
 class AccountTradingInterface:
     """
     ScriptStrategyBase-compatible interface for executor trading.
@@ -872,7 +883,7 @@ class AccountsService:
         if not self._connector_service:
             raise HTTPException(status_code=500, detail="Connector service not initialized")
 
-        cache_key = alias or connector_name
+        cache_key = _credential_storage_key(connector_name, alias)
         try:
             connector = await self._connector_service.update_connector_keys(
                 account_name, connector_name, credentials, alias=alias
@@ -916,12 +927,19 @@ class AccountsService:
 
         detailed_credentials = []
         for credential_file in credentials:
-            connector_name = credential_file.replace('.yml', '')
-            credentials_path = Path(fs_util.get_base_path()) / fs_util.get_connector_keys_path(account_name, connector_name)
+            storage_key = credential_file.replace('.yml', '')
+            credentials_path = Path(fs_util.get_base_path()) / fs_util.get_connector_keys_path(account_name, storage_key)
             config_map = BackendAPISecurity.load_connector_config_map_from_file(credentials_path)
 
-            # Determine alias and type
-            alias = connector_name if connector_name != connector_name.split("_")[0] else None
+            base_connector_name = config_map.connector
+            connector_prefix = f"{base_connector_name}__"
+            if storage_key == base_connector_name:
+                alias = None
+            elif storage_key.startswith(connector_prefix):
+                alias = storage_key[len(connector_prefix):]
+            else:
+                # Legacy sub-account file saved before aliases were namespaced per connector.
+                alias = storage_key
             credential_type = "Sub-account" if alias else "Master"
 
             detailed_credentials.append({
@@ -933,13 +951,27 @@ class AccountsService:
 
         return detailed_credentials
 
-    async def delete_credentials(self, account_name: str, connector_name: str):
+    async def delete_credentials(self, account_name: str, connector_name: str, alias: Optional[str] = None):
         """
         Delete the credentials of the specified connector for the specified account.
         :param account_name:
-        :param connector_name:
+        :param connector_name: Either the base connector name, or an already-resolved
+                                storage key (e.g. passed internally after a failed add).
+        :param alias: Optional alias, when the credential to delete is a sub-account.
         :return:
         """
+        candidates = [connector_name]
+        if alias:
+            candidates = [_credential_storage_key(connector_name, alias), alias, connector_name]
+
+        connector_name = next(
+            (
+                candidate for candidate in candidates
+                if fs_util.path_exists(f"credentials/{account_name}/connectors/{candidate}.yml")
+            ),
+            candidates[0],
+        )
+
         # Delete credentials file if it exists
         if fs_util.path_exists(f"credentials/{account_name}/connectors/{connector_name}.yml"):
             fs_util.delete_file(directory=f"credentials/{account_name}/connectors", file_name=f"{connector_name}.yml")
