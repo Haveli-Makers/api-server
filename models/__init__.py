@@ -109,6 +109,7 @@ from .accounts import (
     LeverageRequest,
     PositionModeRequest,
     CredentialRequest,
+    CredentialDetailsResponse,
 )
 
 

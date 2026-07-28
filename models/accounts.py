@@ -1,5 +1,6 @@
+from typing import Any, Dict, Optional
+
 from pydantic import BaseModel, Field
-from typing import Dict, Any
 
 
 class LeverageRequest(BaseModel):
@@ -16,3 +17,17 @@ class PositionModeRequest(BaseModel):
 class CredentialRequest(BaseModel):
     """Request model for adding connector credentials"""
     credentials: Dict[str, Any] = Field(description="Connector credentials dictionary")
+    encrypted: bool = Field(
+        default=False,
+        description=(
+            "If True, all string values in credentials are RSA-OAEP encrypted and base64-encoded. "
+        ),
+    )
+
+
+class CredentialDetailsResponse(BaseModel):
+    """Response model for connector credential details."""
+    connector_name: str = Field(description="Connector name")
+    parameters: Dict[str, Any] = Field(description="Masked connector credential parameters")
+    alias: Optional[str] = Field(default=None, description="Optional alias for the connector credentials")
+    credential_type: str = Field(description="Type of the connector credentials (e.g., 'master', 'sub account')")

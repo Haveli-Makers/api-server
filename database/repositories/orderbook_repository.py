@@ -63,6 +63,42 @@ class OrderBookRepository:
         result = await self.session.execute(query)
         return result.scalars().all()
 
+    async def count_spread_samples(
+        self,
+        pair: Optional[str] = None,
+        connector: Optional[str] = None,
+        start_timestamp: Optional[int] = None,
+        end_timestamp: Optional[int] = None,
+    ) -> int:
+        """
+        Count total spread samples matching the given filters.
+
+        Args:
+            pair: Optional trading pair filter
+            connector: Optional connector filter
+            start_timestamp: Optional start time filter (milliseconds)
+            end_timestamp: Optional end time filter (milliseconds)
+
+        Returns:
+            Total number of matching records
+        """
+        query = select(func.count()).select_from(MarketData)
+
+        if pair:
+            query = query.where(MarketData.trading_pair == pair)
+
+        if connector:
+            query = query.where(MarketData.exchange == connector)
+
+        if start_timestamp:
+            query = query.where(MarketData.timestamp >= start_timestamp)
+
+        if end_timestamp:
+            query = query.where(MarketData.timestamp <= end_timestamp)
+
+        result = await self.session.execute(query)
+        return result.scalar_one()
+
     def to_dict(self, sample: MarketData) -> Dict:
         """
         Convert MarketData model to dictionary format.
