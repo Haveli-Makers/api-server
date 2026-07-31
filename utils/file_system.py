@@ -1,4 +1,5 @@
 import importlib
+import importlib.util
 import inspect
 import logging
 import os
@@ -265,16 +266,24 @@ class FileSystemUtil:
                 raise yaml.YAMLError(f"Invalid YAML in file '{file_path}': {e}")
 
     @staticmethod
-    def load_script_config_class(script_name: str) -> Optional[Type[BaseClientModel]]:
+    def load_script_config_class(script_name: str, script_path: Optional[Path] = None) -> Optional[Type[BaseClientModel]]:
         """
         Dynamically loads a script's configuration class.
         :param script_name: The name of the script file (without the '.py' extension).
+        :param script_path: Optional source file to load instead of a local bots.scripts module.
         :return: The configuration class from the script, or None if not found.
         """
         try:
-            # Assuming scripts are in a package named 'scripts'
-            module_name = f"bots.scripts.{script_name.replace('.py', '')}"
-            if module_name not in sys.modules:
+            module_name = f"hummingbot_external_scripts.{script_name.replace('.py', '')}" if script_path else \
+                f"bots.scripts.{script_name.replace('.py', '')}"
+            if script_path:
+                spec = importlib.util.spec_from_file_location(module_name, script_path)
+                if spec is None or spec.loader is None:
+                    return None
+                script_module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = script_module
+                spec.loader.exec_module(script_module)
+            elif module_name not in sys.modules:
                 script_module = importlib.import_module(module_name)
             else:
                 script_module = importlib.reload(sys.modules[module_name])
