@@ -1,6 +1,8 @@
 import importlib
+import importlib.util
 import inspect
 import json
+import sys
 import yaml
 from typing import Any, Dict, List, Optional, Type
 
@@ -46,10 +48,25 @@ def _load_script_module(script_name: str):
         except ModuleNotFoundError as exc:
             last_error = exc
 
-    raise HTTPException(
-        status_code=404,
-        detail=f"Script '{script_name}' not found ({last_error})",
-    )
+    try:
+        script_path = get_hummingbot_script_path(script_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Script '{script_name}' not found ({last_error or exc})",
+        )
+
+    external_module_name = f"hummingbot_external_scripts.{normalized_script_name}"
+    spec = importlib.util.spec_from_file_location(external_module_name, script_path)
+    if spec is None or spec.loader is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Script '{script_name}' could not be loaded from {script_path}",
+        )
+    script_module = importlib.util.module_from_spec(spec)
+    sys.modules[external_module_name] = script_module
+    spec.loader.exec_module(script_module)
+    return script_module
 
 
 def _get_script_config_class(script_module) -> Optional[Type[BaseClientModel]]:
@@ -147,11 +164,28 @@ def _list_files_safe(directory: str) -> List[str]:
 async def list_scripts():
     """
     List scripts provided by the imported Hummingbot source checkout.
-    
+
+    Scripts are discovered recursively from the Hummingbot scripts directory
+    (see HUMMINGBOT_SCRIPTS_PATH), so scripts nested in subfolders such as
+    `utility/` are included using their path relative to that directory
+    (e.g. "utility/v2_pmm_single_level").
+
     Returns:
         List of script names (without .py extension)
     """
-    return [f.replace('.py', '') for f in fs_util.list_files('scripts') if f.endswith('.py')]
+    script_names = set()
+    try:
+        scripts_path = get_hummingbot_scripts_path()
+        for script_file in scripts_path.rglob("*.py"):
+            if script_file.name == "__init__.py":
+                continue
+            script_names.add(script_file.relative_to(scripts_path).with_suffix("").as_posix())
+    except FileNotFoundError:
+        pass
+
+    script_names.update(f.replace(".py", "") for f in _list_files_safe("scripts") if f.endswith(".py"))
+
+    return sorted(script_names)
 
 
 @router.post("/runs/instant", response_model=ScriptRunResult)

@@ -15,7 +15,7 @@ from docker.types import LogConfig
 from config import settings
 from models import V2ScriptDeployment
 from utils.file_system import fs_util
-from utils.hummingbot_scripts import get_hummingbot_scripts_path
+from utils.hummingbot_scripts import get_hummingbot_script_path, get_hummingbot_scripts_path
 
 
 class DockerService:
@@ -162,9 +162,43 @@ class DockerService:
         except DockerException as e:
             return {"success": False, "message": str(e)}
 
+    def _flatten_nested_script(self, script_file_name: str) -> str:
+        """
+        Hummingbot's own docker entrypoint (bin/hummingbot_quickstart.py) turns
+        CONFIG_FILE_NAME into a dotted import path (`scripts.<name>`) to load the
+        strategy, but a script nested in a subfolder (e.g. "utility/foo.py") can't be
+        expressed as a valid dotted import when the name still contains a "/".
+        Work around this by copying the script to the top level of the scripts
+        directory before deploying, and deploying under its flat basename instead.
+        """
+        if not script_file_name or "/" not in script_file_name.replace("\\", "/"):
+            return script_file_name
+
+        try:
+            source_path = get_hummingbot_script_path(script_file_name)
+        except FileNotFoundError:
+            # Let deployment proceed and fail with the original name if we can't resolve it.
+            return script_file_name
+
+        scripts_path = get_hummingbot_scripts_path()
+        flat_name = source_path.name
+        destination_path = scripts_path / flat_name
+
+        try:
+            if not destination_path.exists() or destination_path.stat().st_mtime < source_path.stat().st_mtime:
+                shutil.copy2(source_path, destination_path)
+                logger.info(f"Flattened nested script '{script_file_name}' to '{flat_name}' for deployment")
+        except OSError as e:
+            logger.warning(f"Failed to flatten nested script '{script_file_name}': {e}")
+            return script_file_name
+
+        return flat_name
+
     def create_hummingbot_instance(self, config: V2ScriptDeployment):
         bots_path = os.environ.get('BOTS_PATH', self.SOURCE_PATH)  # Default to 'SOURCE_PATH' if BOTS_PATH is not set
         hummingbot_scripts_path = str(get_hummingbot_scripts_path())
+        if config.script:
+            config.script = self._flatten_nested_script(config.script)
         instance_name = config.instance_name
         instance_dir = os.path.join("bots", 'instances', instance_name)
         if not os.path.exists(instance_dir):
