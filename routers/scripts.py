@@ -121,6 +121,11 @@ def _build_config_template(config_class: Type[BaseClientModel]) -> Dict[str, Dic
         prompt = _serialize_field_prompt(extra.get("prompt"))
         if prompt:
             field_info["prompt"] = prompt
+        input_type = extra.get("input_type")
+        options = extra.get("options")
+        if input_type in ("select", "multiselect") and isinstance(options, (list, tuple)):
+            field_info["input_type"] = input_type
+            field_info["options"] = list(options)
         template[field_name] = field_info
 
     return json.loads(json.dumps(template, default=str))
@@ -494,6 +499,4 @@ async def get_script_config_template(script_name: str):
     if config_class is None:
         raise HTTPException(status_code=404, detail=f"Script configuration class for '{script_name}' not found")
 
-    # Extract fields and default values
-    config_fields = {name: field.default for name, field in config_class.model_fields.items()}
-    return json.loads(json.dumps(config_fields, default=str))
+    return _build_config_template(config_class)
