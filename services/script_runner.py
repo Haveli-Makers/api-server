@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import importlib
 import inspect
 import json
@@ -31,6 +32,12 @@ def _validate_name(value: str, field_name: str) -> str:
     if not value or not SAFE_NAME.match(value) or ".." in value:
         raise ValueError(f"Invalid {field_name}: {value}")
     return value[:-3] if value.endswith(".py") else value
+
+
+def _json_default(value):
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return dataclasses.asdict(value)
+    return str(value)
 
 
 def _interval_delta(value: int, unit: str) -> timedelta:
@@ -250,7 +257,7 @@ class ImportableScriptBackend:
             result = await self._run_script_once(script)
             status = "success"
             return_code = 0
-            output = json.dumps(result, default=str)
+            output = json.dumps(result, default=_json_default)
         except Exception as exc:
             status = "failed"
             return_code = 1
