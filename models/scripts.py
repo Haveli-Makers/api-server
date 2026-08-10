@@ -104,6 +104,12 @@ class ScriptScheduleCreate(BaseModel):
         return value
 
 
+class ScriptScheduleToggle(BaseModel):
+    """Request to enable or disable a scheduled script run."""
+
+    enabled: bool = Field(description="Set to False to pause the schedule, True to resume it")
+
+
 class ScriptSchedule(ScriptScheduleCreate):
     """Scheduled script metadata."""
 

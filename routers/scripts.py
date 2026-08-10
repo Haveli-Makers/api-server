@@ -17,6 +17,7 @@ from models import (
     ScriptSchedule,
     ScriptScheduleCreate,
     ScriptScheduleHistory,
+    ScriptScheduleToggle,
 )
 from services.script_runner import ScriptRunnerService
 from utils.file_system import fs_util
@@ -188,7 +189,7 @@ async def run_script_instant(
     Run a strategy script immediately and return its output without storing history.
     """
     try:
-        return await script_runner.run_instant(request)
+        return await script_runner.run_instant(request, config_overrides={"db_target": "local"})
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -232,6 +233,21 @@ async def delete_script_schedule(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
 
+
+@router.post("/schedules/{schedule_id}/enabled", response_model=ScriptSchedule)
+async def set_script_schedule_enabled(
+    schedule_id: str,
+    request: ScriptScheduleToggle,
+    script_runner: ScriptRunnerService = Depends(get_script_runner_service),
+):
+    """
+    Pause (enabled=False) or resume (enabled=True) a recurring script schedule.
+    """
+    try:
+        return await script_runner.set_schedule_enabled(schedule_id, request.enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
+
 @router.post(
     "/run",
     responses={
@@ -259,8 +275,12 @@ async def run_script(
             "config": config_template,
         }
 
+    run_config = dict(request.config)
+    if "db_target" in config_class.model_fields:
+        run_config["db_target"] = "local"
+
     try:
-        config = config_class(**request.config)
+        config = config_class(**run_config)
     except ValidationError as exc:
         raise HTTPException(
             status_code=422,

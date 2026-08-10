@@ -45,10 +45,14 @@ def _interval_delta(value: int, unit: str) -> timedelta:
     raise ValueError(f"Unsupported interval unit: {unit}")
 
 
+def resolve_scheduled_db_target() -> str:
+    return "production" if os.environ.get("DEPLOYMENT_ENV", "").strip().lower() == "production" else "local"
+
+
 class HummingbotSDKScriptBackend:
     """Adapter boundary for the external hummingbot-sdk script runner."""
 
-    async def run(self, request: ScriptProcessRunRequest) -> Optional[ScriptRunResult]:
+    async def run(self, request: ScriptProcessRunRequest, config_overrides: Optional[Dict] = None) -> Optional[ScriptRunResult]:
         try:
             from hummingbot_sdk.scripts import run_script  # type: ignore
         except ImportError:
@@ -110,7 +114,7 @@ class LocalProcessScriptBackend:
                 return os.path.relpath(candidate, self.bots_path)
         return config_name
 
-    async def run(self, request: ScriptProcessRunRequest) -> ScriptRunResult:
+    async def run(self, request: ScriptProcessRunRequest, config_overrides: Optional[Dict] = None) -> ScriptRunResult:
         started_at = _utc_now()
         run_id = str(uuid.uuid4())
         script_path = self._script_path(request.strategy_name)
@@ -237,7 +241,7 @@ class ImportableScriptBackend:
                 return result
         raise ValueError("Script does not expose run_once or fetch_and_store_spread")
 
-    async def run(self, request: ScriptProcessRunRequest) -> ScriptRunResult:
+    async def run(self, request: ScriptProcessRunRequest, config_overrides: Optional[Dict] = None) -> ScriptRunResult:
         started_at = _utc_now()
         run_id = str(uuid.uuid4())
         try:
@@ -245,6 +249,8 @@ class ImportableScriptBackend:
             config_class = self._get_config_class(script_module)
             strategy_class = self._get_strategy_class(script_module)
             config_data = self._load_config(request.config_name)
+            if config_overrides:
+                config_data = {**config_data, **config_overrides}
             config = config_class(**config_data)
             script = self._instantiate_strategy(strategy_class, config)
             result = await self._run_script_once(script)
@@ -297,22 +303,31 @@ class ScriptRunnerService:
                 pass
         await self._save_schedules()
 
-    async def run_instant(self, request: ScriptProcessRunRequest) -> ScriptRunResult:
+    async def run_instant(
+        self, request: ScriptProcessRunRequest, config_overrides: Optional[Dict] = None
+    ) -> ScriptRunResult:
         request.strategy_name = _validate_name(request.strategy_name, "strategy_name")
         if request.config_name:
             request.config_name = _validate_name(request.config_name, "config_name")
-        sdk_result = await self.sdk_backend.run(request)
+        sdk_result = await self.sdk_backend.run(request, config_overrides)
         if sdk_result is not None:
             return sdk_result
-        importable_result = await self.importable_backend.run(request)
+        importable_result = await self.importable_backend.run(request, config_overrides)
         if importable_result.status == "success":
             return importable_result
-        return await self.local_backend.run(request)
+        return await self.local_backend.run(request, config_overrides)
 
     async def create_schedule(self, request: ScriptScheduleCreate) -> ScriptSchedule:
         request.strategy_name = _validate_name(request.strategy_name, "strategy_name")
         if request.config_name:
             request.config_name = _validate_name(request.config_name, "config_name")
+        async with self._lock:
+            name_taken = any(
+                existing.name.strip().lower() == request.name.strip().lower()
+                for existing in self._schedules.values()
+            )
+        if name_taken:
+            raise ValueError(f"A schedule named '{request.name}' already exists")
         schedule = ScriptSchedule(
             id=str(uuid.uuid4()),
             created_at=_utc_now(),
@@ -327,6 +342,15 @@ class ScriptRunnerService:
     async def list_schedules(self) -> List[ScriptSchedule]:
         async with self._lock:
             return sorted(self._schedules.values(), key=lambda item: item.created_at, reverse=True)
+
+    async def set_schedule_enabled(self, schedule_id: str, enabled: bool) -> ScriptSchedule:
+        async with self._lock:
+            schedule = self._schedules.get(schedule_id)
+            if schedule is None:
+                raise KeyError(schedule_id)
+            schedule.enabled = enabled
+            await self._save_schedules()
+            return schedule
 
     async def delete_schedule(self, schedule_id: str) -> Dict[str, str]:
         async with self._lock:
@@ -370,7 +394,9 @@ class ScriptRunnerService:
                 extra_args=schedule.extra_args,
             )
             try:
-                result = await self.run_instant(request)
+                result = await self.run_instant(
+                    request, config_overrides={"db_target": resolve_scheduled_db_target()}
+                )
             except Exception as exc:
                 now = _utc_now()
                 result = ScriptRunResult(
