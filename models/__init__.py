@@ -66,6 +66,7 @@ from .scripts import (
     ScriptSchedule,
     ScriptScheduleCreate,
     ScriptScheduleHistory,
+    ScriptScheduleToggle,
 )
 
 
@@ -285,6 +286,7 @@ __all__ = [
     "ScriptSchedule",
     "ScriptScheduleCreate",
     "ScriptScheduleHistory",
+    "ScriptScheduleToggle",
     # Market data models
     "CandleData",
     "CandlesResponse",
