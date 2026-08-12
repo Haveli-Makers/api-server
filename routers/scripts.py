@@ -122,6 +122,11 @@ def _build_config_template(config_class: Type[BaseClientModel]) -> Dict[str, Dic
         prompt = _serialize_field_prompt(extra.get("prompt"))
         if prompt:
             field_info["prompt"] = prompt
+
+        show_on_dashboard = extra.get("show_on_dashboard")
+        if show_on_dashboard is not None:
+            field_info["show_on_dashboard"] = show_on_dashboard
+            
         input_type = extra.get("input_type")
         options = extra.get("options")
         if input_type in ("select", "multiselect") and isinstance(options, (list, tuple)):
