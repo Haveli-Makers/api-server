@@ -60,6 +60,13 @@ from .scripts import (
     ScriptResponse,
     ScriptConfig,
     ScriptConfigResponse,
+    ScriptRunRequest,
+    ScriptProcessRunRequest,
+    ScriptRunResult,
+    ScriptSchedule,
+    ScriptScheduleCreate,
+    ScriptScheduleHistory,
+    ScriptScheduleToggle,
 )
 
 
@@ -270,9 +277,16 @@ __all__ = [
     "ControllerConfigResponse",
     # Script models
     "Script",
+    "ScriptRunRequest",
+    "ScriptProcessRunRequest",
     "ScriptResponse",
     "ScriptConfig",
     "ScriptConfigResponse",
+    "ScriptRunResult",
+    "ScriptSchedule",
+    "ScriptScheduleCreate",
+    "ScriptScheduleHistory",
+    "ScriptScheduleToggle",
     # Market data models
     "CandleData",
     "CandlesResponse",

@@ -40,7 +40,6 @@ COPY services ./services
 COPY utils ./utils
 COPY database ./database
 COPY bots/controllers ./bots/controllers
-COPY bots/scripts ./bots/scripts
 
 # Create necessary directories
 RUN mkdir -p bots/instances bots/conf bots/credentials bots/data bots/archived

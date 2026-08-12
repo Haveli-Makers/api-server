@@ -11,7 +11,7 @@ $(SETUP_SENTINEL):
 # Run locally (dev mode)
 run:
 	docker compose up emqx postgres -d
-	conda run --no-capture-output -n hummingbot-api uvicorn main:app --reload
+	conda run --no-capture-output -n hummingbot-api uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 # Deploy with Docker
 deploy: $(SETUP_SENTINEL)
