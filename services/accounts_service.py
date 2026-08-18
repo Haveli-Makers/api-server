@@ -3,7 +3,8 @@ import logging
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Optional, Set
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import HTTPException
 from hummingbot.client.config.config_crypt import ETHKeyFileSecretManger
@@ -14,10 +15,20 @@ from config import settings
 from database import AsyncDatabaseManager, AccountRepository, OrderRepository, TradeRepository, FundingRepository
 from services.gateway_client import GatewayClient
 from services.gateway_transaction_poller import GatewayTransactionPoller
+from utils.credentials import extract_masked_credential_parameters
 from utils.file_system import fs_util
+from utils.security import BackendAPISecurity
 
 # Create module-specific logger
 logger = logging.getLogger(__name__)
+
+
+def _credential_storage_key(connector_name: str, alias: Optional[str]) -> str:
+    """Build the on-disk storage key for a credential file.
+
+    Namespacing the alias under the connector name (e.g. 'wazirx__sub_account_1')
+    """
+    return f"{connector_name}__{alias}" if alias else connector_name
 
 
 class AccountTradingInterface:
@@ -848,26 +859,36 @@ class AccountsService:
         from services.unified_connector_service import UnifiedConnectorService
         return UnifiedConnectorService.get_connector_config_map(connector_name)
 
-    async def add_credentials(self, account_name: str, connector_name: str, credentials: dict):
+    async def add_credentials(
+        self,
+        account_name: str,
+        connector_name: str,
+        credentials: dict,
+        alias: Optional[str] = None,
+    ):
         """
         Add or update connector credentials and initialize the connector with validation.
 
         :param account_name: The name of the account.
         :param connector_name: The name of the connector.
         :param credentials: Dictionary containing the connector credentials.
+        :param alias: Optional custom name to store credentials under (e.g. 'binance_sub_1234').
+                      When provided both master and sub-account credentials for the same connector
+                      can coexist within a single account.
         :raises Exception: If credentials are invalid or connector cannot be initialized.
         """
         if not self._connector_service:
             raise HTTPException(status_code=500, detail="Connector service not initialized")
 
+        cache_key = _credential_storage_key(connector_name, alias)
         try:
-            # Update the connector keys (this saves the credentials to file and validates them)
-            connector = await self._connector_service.update_connector_keys(account_name, connector_name, credentials)
-
+            connector = await self._connector_service.update_connector_keys(
+                account_name, connector_name, credentials, alias=alias
+            )
             await self.update_account_state()
         except Exception as e:
             logger.error(f"Error adding connector credentials for account {account_name}: {e}")
-            await self.delete_credentials(account_name, connector_name)
+            await self.delete_credentials(account_name, cache_key)
             raise e
 
     @staticmethod
@@ -891,13 +912,62 @@ class AccountsService:
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
-    async def delete_credentials(self, account_name: str, connector_name: str):
+    def list_credentials_with_details(self, account_name: str) -> List[Dict[str, Any]]:
+        """
+        List all connector credential files for an account with masked parameter details.
+
+        :param account_name: The name of the account.
+        :return: List of connector credential details.
+        """
+        credentials = self.list_credentials(account_name)
+        BackendAPISecurity.login_account(account_name=account_name, secrets_manager=self.secrets_manager)
+
+        detailed_credentials = []
+        for credential_file in credentials:
+            storage_key = credential_file.replace('.yml', '')
+            credentials_path = Path(fs_util.get_base_path()) / fs_util.get_connector_keys_path(account_name, storage_key)
+            config_map = BackendAPISecurity.load_connector_config_map_from_file(credentials_path)
+
+            base_connector_name = config_map.connector
+            connector_prefix = f"{base_connector_name}__"
+            if storage_key == base_connector_name:
+                alias = None
+            elif storage_key.startswith(connector_prefix):
+                alias = storage_key[len(connector_prefix):]
+            else:
+                alias = storage_key
+            credential_type = "Sub-account" if alias else "Master"
+
+            detailed_credentials.append({
+                "connector_name": base_connector_name,
+                "parameters": extract_masked_credential_parameters(config_map),
+                "alias": alias,
+                "credential_type": credential_type,
+            })
+
+        return detailed_credentials
+
+    async def delete_credentials(self, account_name: str, connector_name: str, alias: Optional[str] = None):
         """
         Delete the credentials of the specified connector for the specified account.
         :param account_name:
-        :param connector_name:
+        :param connector_name: Either the base connector name, or an already-resolved
+                                storage key (e.g. passed internally after a failed add).
+        :param alias: Optional alias, when the credential to delete is a sub-account.
         :return:
         """
+        candidates = [connector_name]
+        if alias:
+            candidates = [_credential_storage_key(connector_name, alias), alias, connector_name]
+
+        connector_name = next(
+            (
+                candidate for candidate in candidates
+                if fs_util.path_exists(f"credentials/{account_name}/connectors/{candidate}.yml")
+            ),
+            candidates[0],
+        )
+
         # Delete credentials file if it exists
         if fs_util.path_exists(f"credentials/{account_name}/connectors/{connector_name}.yml"):
             fs_util.delete_file(directory=f"credentials/{account_name}/connectors", file_name=f"{connector_name}.yml")

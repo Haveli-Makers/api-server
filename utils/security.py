@@ -40,8 +40,8 @@ class BackendAPISecurity(Security):
 
     @classmethod
     def decrypt_connector_config(cls, file_path: Path):
-        connector_name = connector_name_from_file(file_path)
-        cls._secure_configs[connector_name] = cls.load_connector_config_map_from_file(file_path)
+        alias = file_path.stem
+        cls._secure_configs[alias] = cls.load_connector_config_map_from_file(file_path)
 
     @classmethod
     def load_connector_config_map_from_file(cls, yml_path: Path) -> HummingbotAPIConfigAdapter:
@@ -60,6 +60,19 @@ class BackendAPISecurity(Security):
         fs_util.ensure_file_and_dump_text(str(file_path), cm_yml_str)
         update_connector_hb_config(connector_config)
         cls._secure_configs[connector_name] = connector_config
+
+    @classmethod
+    def update_connector_keys_with_alias(cls, account_name: str, connector_config: ClientConfigAdapter, alias: str):
+        """Save connector credentials under a custom alias filename.
+
+        Allows storing multiple credential sets for the same connector type, e.g.
+        binance_master.yml and binance_sub_1234.yml both backed by the binance connector.
+        """
+        file_path = fs_util.get_connector_keys_path(account_name=account_name, connector_name=alias)
+        cm_yml_str = connector_config.generate_yml_output_str_with_comments()
+        fs_util.ensure_file_and_dump_text(str(file_path), cm_yml_str)
+        update_connector_hb_config(connector_config)
+        cls._secure_configs[alias] = connector_config
 
     @staticmethod
     def new_password_required() -> bool:
