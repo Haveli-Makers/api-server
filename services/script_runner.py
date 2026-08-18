@@ -438,8 +438,8 @@ class ScriptRunnerService:
             async with self._lock:
                 current = self._schedules.get(schedule.id)
                 if current:
-                    current.last_run_at = result.completed_at
                     interval = _interval_delta(current.interval_value, current.interval_unit)
+                    current.last_run_at = current.next_run_at
                     next_run = current.next_run_at + interval
                     now = _utc_now()
                     while next_run <= now:
