@@ -431,3 +431,28 @@ class ExecutorOrder(Base):
     executor = relationship("ExecutorRecord", back_populates="orders")
 
 
+class ApiRequestLog(Base):
+    __tablename__ = "api_request_logs"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+
+    timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False, index=True)
+    user_email = Column(String, nullable=True, index=True)
+    client_ip = Column(String, nullable=True)
+
+    method = Column(String(10), nullable=False)
+    path = Column(String, nullable=False, index=True)
+    query_params = Column(Text, nullable=True)
+    request_body = Column(Text, nullable=True)  
+
+    status_code = Column(Integer, nullable=False, index=True)
+    response_body = Column(Text, nullable=True)  
+    duration_ms = Column(Float, nullable=False)
+    error_message = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_api_request_logs_user_timestamp", "user_email", "timestamp"),
+        Index("ix_api_request_logs_path_timestamp", "path", "timestamp"),
+    )
+
+
