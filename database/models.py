@@ -351,6 +351,19 @@ class MarketData(Base):
         Index("idx_market_data_timestamp", "timestamp"),
         Index("idx_market_data_trading_pair", "trading_pair"),
         Index("idx_market_data_exchange", "exchange"),
+        Index(
+            "idx_market_data_exchange_pair_timestamp_desc",
+            "exchange",
+            "trading_pair",
+            "timestamp",
+            postgresql_include=["best_bid", "best_ask", "mid_price", "spread"],
+        ),
+        Index(
+            "idx_market_data_exchange_timestamp_desc",
+            "exchange",
+            "timestamp",
+            postgresql_include=["trading_pair", "spread"],
+        ),
     )
     timestamp = Column(BigInteger, nullable=False)
     exchange = Column(Text, nullable=False)

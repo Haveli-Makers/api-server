@@ -485,6 +485,7 @@ async def get_spread_data(
     connector_name: str,
     trading_pair: str,
     limit: int = Query(default=100, ge=1, le=100000),
+    include_total_count: bool = Query(default=False),
     market_data_service: MarketDataService = Depends(get_market_data_service)
 ):
     """
@@ -493,6 +494,7 @@ async def get_spread_data(
     Query parameters:
         - trading_pair: Filter by trading pair (e.g., BTC-USDT)
         - connector_name: Filter by exchange (e.g., binance)
+        - include_total_count: Set true only when an exact total row count is needed
         
     Args:
         trading_pair: Optional trading pair filter
@@ -506,7 +508,8 @@ async def get_spread_data(
         result = await market_data_service.get_spread_data(
             pair=trading_pair,
             connector=connector_name,
-            limit=limit
+            limit=limit,
+            include_total_count=include_total_count,
         )
         
         return result

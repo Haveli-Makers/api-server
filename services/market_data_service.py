@@ -857,45 +857,13 @@ class MarketDataService:
             async with self._db_manager.get_session_context() as session:
                 orderbook_repo = OrderBookRepository(session)
 
-                spread_data = {}
-                for pair in pairs or [None]:
-                    for connector in connectors or [None]:
-                        samples = await orderbook_repo.get_spread_samples(
-                            pair=pair,
-                            connector=connector,
-                            start_timestamp=cutoff_time
-                        )
-                        for sample in samples:
-                            key = (sample.trading_pair, sample.exchange)
-                            if key not in spread_data:
-                                spread_data[key] = {
-                                    "spread_sum": 0.0,
-                                    "min_spread": float('inf'),
-                                    "max_spread": 0.0,
-                                    "sample_count": 0
-                                }
-                            if sample.spread is None:
-                                continue
-                            spread_data[key]["spread_sum"] += float(sample.spread)
-                            spread_data[key]["min_spread"] = min(spread_data[key]["min_spread"], float(sample.spread))
-                            spread_data[key]["max_spread"] = max(spread_data[key]["max_spread"], float(sample.spread))
-                            spread_data[key]["sample_count"] += 1
-                
-                avg_spread_data = []
-                for (pair, connector), stats in spread_data.items():
-                    if stats["sample_count"] == 0:
-                        continue
-                    avg_spread = stats["spread_sum"] / stats["sample_count"]
-                    
-                    avg_spread_data.append({
-                        "pair": pair,
-                        "connector": connector,
-                        "avg_spread": round(avg_spread, 2),
-                        "min_spread": stats["min_spread"],
-                        "max_spread": stats["max_spread"],
-                        "sample_count": stats["sample_count"]
-                    })
-                logger.debug(f"Calculated spread averages for {len(spread_data)} pairs")
+                avg_spread_data = await orderbook_repo.get_spread_averages(
+                    pairs=pairs,
+                    connectors=connectors,
+                    start_timestamp=cutoff_time,
+                )
+
+                logger.debug(f"Calculated spread averages for {len(avg_spread_data)} pairs")
                 return avg_spread_data
                 
         except Exception as e:
@@ -906,7 +874,8 @@ class MarketDataService:
         self,
         pair: str,
         connector: str,
-        limit: int = 100
+        limit: int = 100,
+        include_total_count: bool = False,
     ) -> Dict:
         """
         Get raw spread samples from database.
@@ -925,26 +894,32 @@ class MarketDataService:
             async with self._db_manager.get_session_context() as session:
                 orderbook_repo = OrderBookRepository(session)
                 
-                # Get spread samples
+                fetch_limit = limit + 1 if limit else limit
+
+                # Get one extra row so callers can tell if more pages exist without
+                # paying for an exact COUNT(*) over millions of rows.
                 samples = await orderbook_repo.get_spread_samples(
                     pair=pair,
                     connector=connector,
-                    limit=limit
+                    limit=fetch_limit
                 )
 
-                # Convert to dictionaries
-                data = [orderbook_repo.to_dict(sample) for sample in samples]
+                has_more = len(samples) > limit if limit else False
+                data = samples[:limit] if limit else samples
 
-                total_count = await orderbook_repo.count_spread_samples(
-                    pair=pair,
-                    connector=connector
-                )
+                total_count = None
+                if include_total_count:
+                    total_count = await orderbook_repo.count_spread_samples(
+                        pair=pair,
+                        connector=connector
+                    )
 
-                logger.debug(f"Retrieved {len(data)} of {total_count} spread samples")
+                logger.debug(f"Retrieved {len(data)} spread samples")
                 return {
                     "data": data,
                     "count": len(data),
-                    "total_count": total_count
+                    "total_count": total_count,
+                    "has_more": has_more,
                 }
                 
         except Exception as e:
