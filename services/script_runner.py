@@ -22,6 +22,7 @@ from utils.hummingbot_scripts import get_hummingbot_script_path
 
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+RUN_TIMEOUT_SECONDS = 120
 
 
 def _utc_now() -> datetime:
@@ -132,8 +133,14 @@ class LocalProcessScriptBackend:
             cmd.extend(["--config", self._config_arg(request.config_name)])
         if request.verbose:
             cmd.append("-vd")
-        if request.extra_args:
-            cmd.extend(shlex.split(request.extra_args))
+        extra_tokens = shlex.split(request.extra_args) if request.extra_args else []
+        for key, value in (config_overrides or {}).items():
+            flag = f"--{key}"
+            if flag not in cmd and flag not in extra_tokens:
+                cmd.extend([flag, str(value)])
+        cmd.extend(extra_tokens)
+        if "--once" not in cmd:
+            cmd.append("--once")
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -141,7 +148,12 @@ class LocalProcessScriptBackend:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await proc.communicate()
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
         output = "\n".join(
             part.decode("utf-8", errors="replace").strip()
             for part in [stdout, stderr]
@@ -372,6 +384,9 @@ class ScriptRunnerService:
             schedule = self._schedules.get(schedule_id)
             if schedule is None:
                 raise KeyError(schedule_id)
+            if schedule_id in self._running_schedule_ids:
+                raise ValueError(f"Schedule '{schedule_id}' is already running")
+            self._running_schedule_ids.add(schedule_id)
         return await self._run_schedule(schedule)
 
     async def get_history(self, schedule_id: str, limit: int = 50) -> List[ScriptRunResult]:
@@ -387,11 +402,11 @@ class ScriptRunnerService:
             schedules = await self.list_schedules()
             for schedule in schedules:
                 if schedule.enabled and schedule.next_run_at <= now and schedule.id not in self._running_schedule_ids:
+                    self._running_schedule_ids.add(schedule.id)
                     asyncio.create_task(self._run_schedule(schedule))
             await asyncio.sleep(1)
 
     async def _run_schedule(self, schedule: ScriptSchedule) -> ScriptRunResult:
-        self._running_schedule_ids.add(schedule.id)
         try:
             request = ScriptProcessRunRequest(
                 strategy_name=schedule.strategy_name,
@@ -401,11 +416,20 @@ class ScriptRunnerService:
                 extra_args=schedule.extra_args,
             )
             try:
-                result = await self.run_instant(
-                    request, config_overrides={"db_target": resolve_scheduled_db_target()}
+                result = await asyncio.wait_for(
+                    self.run_instant(
+                        request, config_overrides={"db_target": resolve_scheduled_db_target()}
+                    ),
+                    timeout=RUN_TIMEOUT_SECONDS,
                 )
             except Exception as exc:
                 now = _utc_now()
+                status = "timeout" if isinstance(exc, asyncio.TimeoutError) else "failed"
+                output = (
+                    f"Run exceeded {RUN_TIMEOUT_SECONDS}s and was abandoned"
+                    if isinstance(exc, asyncio.TimeoutError)
+                    else str(exc)
+                )
                 result = ScriptRunResult(
                     run_id=str(uuid.uuid4()),
                     strategy_name=schedule.strategy_name,
@@ -413,27 +437,35 @@ class ScriptRunnerService:
                     account_name=schedule.account_name,
                     started_at=now,
                     completed_at=now,
-                    status="failed",
-                    output=str(exc),
+                    status=status,
+                    output=output,
                     return_code=1,
                 )
             await self._append_history(schedule.id, result)
             async with self._lock:
                 current = self._schedules.get(schedule.id)
                 if current:
-                    current.last_run_at = result.completed_at
-                    current.next_run_at = result.completed_at + _interval_delta(current.interval_value, current.interval_unit)
+                    interval = _interval_delta(current.interval_value, current.interval_unit)
+                    current.last_run_at = current.next_run_at
+                    next_run = current.next_run_at + interval
+                    now = _utc_now()
+                    while next_run <= now:
+                        next_run += interval
+                    current.next_run_at = next_run
                     await self._save_schedules()
             return result
         finally:
             self._running_schedule_ids.discard(schedule.id)
 
     async def _append_history(self, schedule_id: str, result: ScriptRunResult):
+        await asyncio.to_thread(self._append_history_sync, schedule_id, result)
+
+    def _append_history_sync(self, schedule_id: str, result: ScriptRunResult):
         history_file = self.history_path / f"{schedule_id}.json"
         data = []
         if history_file.exists():
             data = json.loads(history_file.read_text(encoding="utf-8"))
-        data.append(json.loads(result.model_dump_json()))
+        data.append(result.model_dump(mode="json"))
         history_file.write_text(json.dumps(data[-50:], indent=2), encoding="utf-8")
 
     async def _load_schedules(self):
@@ -444,6 +476,9 @@ class ScriptRunnerService:
         self._schedules = {item["id"]: ScriptSchedule(**item) for item in data}
 
     async def _save_schedules(self):
+        payload = [schedule.model_dump(mode="json") for schedule in self._schedules.values()]
+        await asyncio.to_thread(self._save_schedules_sync, payload)
+
+    def _save_schedules_sync(self, payload: List[Dict]):
         self.storage_path.mkdir(parents=True, exist_ok=True)
-        payload = [json.loads(schedule.model_dump_json()) for schedule in self._schedules.values()]
         self.schedules_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
