@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse
 from hummingbot.data_feed.market_data_provider import MarketDataProvider
 from hummingbot.client.config.config_crypt import ETHKeyFileSecretManger
 
+from middleware import RequestLoggingMiddleware
 from utils.security import BackendAPISecurity
 from services.bots_orchestrator import BotsOrchestrator
 from services.accounts_service import AccountsService
@@ -309,6 +310,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Log tracked API requests with user, endpoint, timing, and result.
+app.add_middleware(RequestLoggingMiddleware)
 
 
 @app.exception_handler(RequestValidationError)
