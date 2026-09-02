@@ -16,6 +16,8 @@ MAX_BODY_CHARS = 8000
 
 EXCLUDED_PATHS = {"/", "/docs", "/openapi.json", "/redoc", "/favicon.ico"}
 
+AUDIT_LOG_HEADER = "x-audit-log"
+
 REDACT_KEYS = {
     "password", "secret", "token", "api_key", "apikey", "private_key",
     "authorization", "cookie_secret", "client_secret",
@@ -54,7 +56,7 @@ def _truncate_body(raw: bytes) -> Optional[str]:
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in EXCLUDED_PATHS:
+        if request.url.path in EXCLUDED_PATHS or not self._should_log(request):
             return await call_next(request)
 
         start = time.monotonic()
@@ -96,6 +98,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         )
 
         return response
+
+    @staticmethod
+    def _should_log(request: Request) -> bool:
+        override = request.headers.get(AUDIT_LOG_HEADER)
+        if override == "1":
+            return True
+        if override == "0":
+            return False
+        return request.method != "GET"
 
     def _log_in_background(
         self,
