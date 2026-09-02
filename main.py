@@ -311,7 +311,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Audit-log every request (who called what, when, and with what result).
+# Log tracked API requests with user, endpoint, timing, and result.
 app.add_middleware(RequestLoggingMiddleware)
 
 
