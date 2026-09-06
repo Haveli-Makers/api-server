@@ -445,14 +445,14 @@ async def get_spread_averages(
 ):
     """
     Get average spread data grouped by trading pair.
-    
-    This endpoint calculates average spreads from the spread_samples table
-    within the given time window. Results are grouped by pair and connector.
-    
+
+    This endpoint calculates average spreads from the precomputed spread rollup
+    over all recorded history. Results are grouped by pair and connector.
+
     Args:
         request: Spread average request parameters
         market_data_service: Injected market data service
-        
+
     Returns:
         Average spread statistics for each trading pair
     """
@@ -460,13 +460,11 @@ async def get_spread_averages(
         spread_data = await market_data_service.get_spread_averages(
             pairs=request.pairs,
             connectors=request.connectors,
-            window_hours=request.window_hours
         )
-        
+
         # Convert to response model
         return SpreadAverageResponse(
             data=[SpreadAverageData(**item) for item in spread_data],
-            window_hours=request.window_hours,
             total_pairs=len(spread_data),
             timestamp=time.time()
         )

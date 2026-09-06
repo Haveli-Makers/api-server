@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Sequence
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.models import MarketData
+from database.models import MarketData, MarketDataSpreadAgg
 
 
 class OrderBookRepository:
@@ -73,39 +73,38 @@ class OrderBookRepository:
         self,
         pairs: Optional[Sequence[str]] = None,
         connectors: Optional[Sequence[str]] = None,
-        start_timestamp: Optional[int] = None,
     ) -> List[Dict]:
+        """Return per-pair spread stats from the precomputed rollup table."""
+        avg_spread = MarketDataSpreadAgg.sum_spread / func.nullif(
+            MarketDataSpreadAgg.cnt_spread, 0
+        )
         query = (
             select(
-                MarketData.trading_pair.label("pair"),
-                MarketData.exchange.label("connector"),
-                func.avg(MarketData.spread).label("avg_spread"),
-                func.min(MarketData.spread).label("min_spread"),
-                func.max(MarketData.spread).label("max_spread"),
-                func.count(MarketData.spread).label("sample_count"),
+                MarketDataSpreadAgg.trading_pair.label("pair"),
+                MarketDataSpreadAgg.exchange.label("connector"),
+                avg_spread.label("avg_spread"),
+                MarketDataSpreadAgg.min_spread.label("min_spread"),
+                MarketDataSpreadAgg.max_spread.label("max_spread"),
+                MarketDataSpreadAgg.cnt_spread.label("sample_count"),
             )
-            .where(MarketData.spread.is_not(None))
-            .group_by(MarketData.trading_pair, MarketData.exchange)
-            .order_by(MarketData.exchange, MarketData.trading_pair)
+            .where(MarketDataSpreadAgg.cnt_spread > 0)
+            .order_by(MarketDataSpreadAgg.exchange, MarketDataSpreadAgg.trading_pair)
         )
 
         if pairs:
-            query = query.where(MarketData.trading_pair.in_(pairs))
+            query = query.where(MarketDataSpreadAgg.trading_pair.in_(pairs))
 
         if connectors:
-            query = query.where(MarketData.exchange.in_(connectors))
-
-        if start_timestamp:
-            query = query.where(MarketData.timestamp >= start_timestamp)
+            query = query.where(MarketDataSpreadAgg.exchange.in_(connectors))
 
         result = await self.session.execute(query)
         return [
             {
                 "pair": row["pair"],
                 "connector": row["connector"],
-                "avg_spread": round(float(row["avg_spread"]), 2),
-                "min_spread": float(row["min_spread"]),
-                "max_spread": float(row["max_spread"]),
+                "avg_spread": round(float(row["avg_spread"]), 2) if row["avg_spread"] is not None else 0.0,
+                "min_spread": float(row["min_spread"]) if row["min_spread"] is not None else 0.0,
+                "max_spread": float(row["max_spread"]) if row["max_spread"] is not None else 0.0,
                 "sample_count": int(row["sample_count"]),
             }
             for row in result.mappings().all()

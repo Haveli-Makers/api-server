@@ -347,23 +347,7 @@ class GatewayCLMMEvent(Base):
 class MarketData(Base):
     __tablename__ = "MarketData"
     __table_args__ = (
-        PrimaryKeyConstraint("timestamp", "exchange", "trading_pair"),
-        Index("idx_market_data_timestamp", "timestamp"),
-        Index("idx_market_data_trading_pair", "trading_pair"),
-        Index("idx_market_data_exchange", "exchange"),
-        Index(
-            "idx_market_data_exchange_pair_timestamp_desc",
-            "exchange",
-            "trading_pair",
-            "timestamp",
-            postgresql_include=["best_bid", "best_ask", "mid_price", "spread"],
-        ),
-        Index(
-            "idx_market_data_exchange_timestamp_desc",
-            "exchange",
-            "timestamp",
-            postgresql_include=["trading_pair", "spread"],
-        ),
+        PrimaryKeyConstraint("exchange", "trading_pair", "timestamp"),
     )
     timestamp = Column(BigInteger, nullable=False)
     exchange = Column(Text, nullable=False)
@@ -372,6 +356,20 @@ class MarketData(Base):
     best_bid = Column(Float, nullable=False)
     best_ask = Column(Float, nullable=False)
     spread = Column(Numeric(5, 2), nullable=True)
+
+
+class MarketDataSpreadAgg(Base):
+    __tablename__ = "market_data_spread_agg"
+    __table_args__ = (
+        PrimaryKeyConstraint("exchange", "trading_pair"),
+    )
+    exchange = Column(Text, nullable=False)
+    trading_pair = Column(Text, nullable=False)
+    sum_spread = Column(Numeric, nullable=False, server_default="0")
+    cnt_spread = Column(BigInteger, nullable=False, server_default="0")
+    min_spread = Column(Numeric(5, 2), nullable=True)
+    max_spread = Column(Numeric(5, 2), nullable=True)
+
 
 class ExecutorRecord(Base):
     """Database model for executor state persistence."""
