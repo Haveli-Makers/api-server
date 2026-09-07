@@ -581,6 +581,53 @@ async def stop_and_archive_bot(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _deploy_script(
+    config: V2ScriptDeployment, 
+    docker_manager: DockerService,
+    db_manager: AsyncDatabaseManager
+):
+    try:
+        logging.info(f"Creating hummingbot instance with config: {config}")
+        response = docker_manager.create_hummingbot_instance(config)
+
+        # Track bot run if deployment was successful
+        if response.get("success"):
+            try:
+                async with db_manager.get_session_context() as session:
+                    bot_run_repo = BotRunRepository(session)
+                    await bot_run_repo.create_bot_run(
+                        bot_name=config.instance_name,
+                        instance_name=config.instance_name,
+                        strategy_type="script",
+                        strategy_name=config.script or "unknown",
+                        account_name=config.credentials_profile,
+                        config_name=config.script_config,
+                        image_version=config.image,
+                        deployment_config=config.dict()
+                    )
+                    logger.info(f"Created bot run record for {config.instance_name}")
+            except Exception as e:
+                logger.error(f"Failed to create bot run record: {e}")
+                # Don't fail the deployment if bot run creation fails
+
+        return response
+    except Exception as e:
+        logger.exception(f"Error deploying script instance {config.instance_name}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/deploy-script")
+async def deploy_script(
+    config: V2ScriptDeployment,
+    docker_manager: DockerService = Depends(get_docker_service),
+    db_manager: AsyncDatabaseManager = Depends(get_database_manager)
+):
+    """
+    Creates and autostarts a script-based Hummingbot instance.
+    """
+    return await _deploy_script(config, docker_manager, db_manager)
+
+
 @router.post("/deploy-v2-script")
 async def deploy_v2_script(
     config: V2ScriptDeployment, 
@@ -588,40 +635,10 @@ async def deploy_v2_script(
     db_manager: AsyncDatabaseManager = Depends(get_database_manager)
 ):
     """
-    Creates and autostart a v2 script with a configuration if present.
-    
-    Args:
-        config: Configuration for the new Hummingbot instance
-        docker_manager: Docker service dependency
-        db_manager: Database manager dependency
-        
-    Returns:
-        Dictionary with creation response and instance details
+    Creates and autostarts a script-based Hummingbot instance.
+    Kept for backward compatibility with existing clients.
     """
-    logging.info(f"Creating hummingbot instance with config: {config}")
-    response = docker_manager.create_hummingbot_instance(config)
-    
-    # Track bot run if deployment was successful
-    if response.get("success"):
-        try:
-            async with db_manager.get_session_context() as session:
-                bot_run_repo = BotRunRepository(session)
-                await bot_run_repo.create_bot_run(
-                    bot_name=config.instance_name,
-                    instance_name=config.instance_name,
-                    strategy_type="script",
-                    strategy_name=config.script or "unknown",
-                    account_name=config.credentials_profile,
-                    config_name=config.script_config,
-                    image_version=config.image,
-                    deployment_config=config.dict()
-                )
-                logger.info(f"Created bot run record for {config.instance_name}")
-        except Exception as e:
-            logger.error(f"Failed to create bot run record: {e}")
-            # Don't fail the deployment if bot run creation fails
-    
-    return response
+    return await _deploy_script(config, docker_manager, db_manager)
 
 
 @router.post("/deploy-v2-controllers")

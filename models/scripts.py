@@ -15,6 +15,11 @@ class ScriptResponse(BaseModel):
     content: str = Field(description="Script source code")
 
 
+class CommunityScriptImport(BaseModel):
+    """Request to import a script from the configured community scripts directory"""
+    override: bool = Field(default=True, description="Override existing local script if present")
+
+
 # Script configuration operations
 class ScriptConfig(BaseModel):
     """Script configuration content"""

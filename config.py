@@ -81,6 +81,10 @@ class AppSettings(BaseSettings):
     # Static paths
     controllers_path: str = "bots/conf/controllers"
     controllers_module: str = "bots.controllers"
+    community_scripts_path: str = Field(
+        default=r"C:\Users\dipti\Desktop\haveli makers\hummingbot\scripts\community",
+        description="External Hummingbot community scripts directory"
+    )
     password_verification_path: str = "credentials/master_account/.password_verification"
     
     # Environment-configurable settings

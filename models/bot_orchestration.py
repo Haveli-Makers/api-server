@@ -1,5 +1,5 @@
 from typing import Any, Dict, Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
 
@@ -103,6 +103,29 @@ class V2ScriptDeployment(BaseModel):
     script_config: Optional[str] = Field(default=None, description="Name of the script configuration file (without .yml extension)")
     headless: bool = Field(default=False, description="Run in headless mode (no UI)")
 
+    @field_validator("instance_name")
+    @classmethod
+    def validate_instance_name(cls, value: str) -> str:
+        import re
+
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", value):
+            raise ValueError("Use only letters, numbers, dots, underscores, and hyphens. Spaces are not allowed.")
+        return value
+
+    @field_validator("script")
+    @classmethod
+    def normalize_script_filename(cls, value: Optional[str]) -> Optional[str]:
+        if value and not value.endswith(".py"):
+            return f"{value}.py"
+        return value
+
+    @field_validator("script_config")
+    @classmethod
+    def normalize_script_config_filename(cls, value: Optional[str]) -> Optional[str]:
+        if value and not value.endswith(".yml"):
+            return f"{value}.yml"
+        return value
+
 
 class V2ControllerDeployment(BaseModel):
     """Configuration for deploying a bot with controllers"""
@@ -113,3 +136,12 @@ class V2ControllerDeployment(BaseModel):
     max_controller_drawdown_quote: Optional[float] = Field(default=None, description="Maximum allowed per-controller drawdown in quote usually USDT")
     image: str = Field(default="hummingbot/hummingbot:latest", description="Docker image for the Hummingbot instance")
     headless: bool = Field(default=False, description="Run in headless mode (no UI)")
+
+    @field_validator("instance_name")
+    @classmethod
+    def validate_instance_name(cls, value: str) -> str:
+        import re
+
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", value):
+            raise ValueError("Use only letters, numbers, dots, underscores, and hyphens. Spaces are not allowed.")
+        return value

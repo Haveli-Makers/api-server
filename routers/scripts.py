@@ -1,13 +1,16 @@
 import importlib
 import inspect
 import json
+import os
 import yaml
 from typing import Any, Dict, List, Optional, Type
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from models.scripts import CommunityScriptImport
 from pydantic import ValidationError
 from starlette import status
 
+from config import settings
 from deps import get_script_runner_service
 from models import (
     Script,
@@ -160,6 +163,18 @@ async def _run_script_once(script_instance):
         status_code=400,
         detail="Script does not expose a supported one-shot run method",
     )
+
+def _normalize_script_filename(script_name: str) -> str:
+    """Return the community script file name, ensuring a single .py suffix."""
+    name = script_name.strip()
+    return name if name.endswith(".py") else f"{name}.py"
+
+
+def _get_community_script_path(script_name: str) -> str:
+    """Resolve the absolute path of a script in the community scripts directory."""
+    community_dir = settings.app.community_scripts_path
+    return os.path.join(community_dir, _normalize_script_filename(script_name))
+
 
 def _list_files_safe(directory: str) -> List[str]:
     try:
@@ -344,6 +359,79 @@ async def get_script_schedule_history(
     if not any(schedule.id == schedule_id for schedule in schedules):
         raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
     return ScriptScheduleHistory(schedule_id=schedule_id, runs=await script_runner.get_history(schedule_id, limit))
+
+
+@router.get("/community/", response_model=List[str])
+async def list_community_scripts():
+    """
+    List scripts available in the configured external community scripts directory.
+    """
+    community_dir = settings.app.community_scripts_path
+    try:
+        return [
+            f.replace(".py", "")
+            for f in os.listdir(community_dir)
+            if os.path.isfile(os.path.join(community_dir, f)) and f.endswith(".py")
+        ]
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Community scripts directory not found: {community_dir}"
+        )
+
+
+@router.get("/community/{script_name}", response_model=Dict[str, str])
+async def get_community_script(script_name: str):
+    """
+    Get script content from the configured external community scripts directory.
+    """
+    script_path = _get_community_script_path(script_name)
+    try:
+        with open(script_path, "r", encoding="utf-8") as script_file:
+            content = script_file.read()
+        return {
+            "name": _normalize_script_filename(script_name).replace(".py", ""),
+            "content": content,
+            "source_path": script_path
+        }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Community script '{script_name}' not found")
+
+
+@router.post("/community/{script_name}/import", status_code=status.HTTP_201_CREATED)
+async def import_community_script(script_name: str, import_request: CommunityScriptImport = CommunityScriptImport()):
+    """
+    Import a community script into this API server's local bots/scripts directory.
+    """
+    filename = _normalize_script_filename(script_name)
+    script_path = _get_community_script_path(script_name)
+    try:
+        with open(script_path, "r", encoding="utf-8") as script_file:
+            content = script_file.read()
+
+        local_script_path = os.path.join(fs_util.get_base_path(), "scripts", filename)
+        if os.path.exists(local_script_path):
+            with open(local_script_path, "r", encoding="utf-8") as local_script_file:
+                existing_content = local_script_file.read()
+            if existing_content == content:
+                return {
+                    "message": f"Community script '{filename}' is already up to date",
+                    "script": filename,
+                    "deploy_script": filename,
+                    "source_path": script_path
+                }
+
+        fs_util.add_file("scripts", filename, content, override=import_request.override)
+        return {
+            "message": f"Community script '{filename}' imported successfully",
+            "script": filename,
+            "deploy_script": filename,
+            "source_path": script_path
+        }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Community script '{script_name}' not found")
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail=f"Script '{filename}' already exists")
 
 
 # Script Configuration endpoints (must come before script name routes)
