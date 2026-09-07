@@ -59,38 +59,15 @@ class AsyncDatabaseManager:
         try:
             async with self.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-                
+
                 # Drop Hummingbot's native tables since we use our custom orders/trades tables
                 await self._drop_hummingbot_tables(conn)
 
-            await self._ensure_market_data_indexes()
             logger.info("Database tables created successfully")
         except Exception as e:
             logger.error(f"Failed to create database tables: {e}")
             raise
 
-    async def _ensure_market_data_indexes(self):
-        """Create performance indexes for large MarketData queries."""
-        statements = [
-            """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_market_data_exchange_pair_timestamp_desc
-            ON "MarketData" (exchange, trading_pair, timestamp DESC)
-            INCLUDE (best_bid, best_ask, mid_price, spread)
-            """,
-            """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_market_data_exchange_timestamp_desc
-            ON "MarketData" (exchange, timestamp DESC)
-            INCLUDE (trading_pair, spread)
-            """,
-        ]
-
-        async with self.engine.connect() as conn:
-            conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-            for statement in statements:
-                await conn.execute(text(statement))
-
-        logger.info("MarketData performance indexes verified")
-    
     async def _drop_hummingbot_tables(self, conn):
         """Drop Hummingbot's native database tables since we use custom ones."""
         hummingbot_tables = [

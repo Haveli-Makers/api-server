@@ -181,12 +181,10 @@ class SpreadAverageRequest(BaseModel):
     """Request parameters for spread averages"""
     pairs: Optional[List[str]] = Field(default=[], description="List of trading pairs (required)")
     connectors: Optional[List[str]] = Field(default=[], description="List of connectors (required)")
-    window_hours: int = Field(24, description="Time window in hours", ge=1)
 
 class SpreadAverageResponse(BaseModel):
     """Response containing spread averages"""
     data: List[SpreadAverageData]
-    window_hours: int
     total_pairs: int
     timestamp: float
 
