@@ -348,6 +348,12 @@ class MarketData(Base):
     __tablename__ = "MarketData"
     __table_args__ = (
         PrimaryKeyConstraint("exchange", "trading_pair", "timestamp"),
+        Index(
+            "ix_marketdata_exchange_trading_pair",
+            "exchange",
+            "trading_pair",
+            postgresql_include=["spread"],
+        ),
     )
     timestamp = Column(BigInteger, nullable=False)
     exchange = Column(Text, nullable=False)
@@ -356,19 +362,6 @@ class MarketData(Base):
     best_bid = Column(Float, nullable=False)
     best_ask = Column(Float, nullable=False)
     spread = Column(Numeric(5, 2), nullable=True)
-
-
-class MarketDataSpreadAgg(Base):
-    __tablename__ = "market_data_spread_agg"
-    __table_args__ = (
-        PrimaryKeyConstraint("exchange", "trading_pair"),
-    )
-    exchange = Column(Text, nullable=False)
-    trading_pair = Column(Text, nullable=False)
-    sum_spread = Column(Numeric, nullable=False, server_default="0")
-    cnt_spread = Column(BigInteger, nullable=False, server_default="0")
-    min_spread = Column(Numeric(5, 2), nullable=True)
-    max_spread = Column(Numeric(5, 2), nullable=True)
 
 
 class ExecutorRecord(Base):
