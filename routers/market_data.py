@@ -445,14 +445,13 @@ async def get_spread_averages(
 ):
     """
     Get average spread data grouped by trading pair.
-    
-    This endpoint calculates average spreads from the spread_samples table
-    within the given time window. Results are grouped by pair and connector.
-    
+
+    This endpoint calculates average spreads.
+
     Args:
         request: Spread average request parameters
         market_data_service: Injected market data service
-        
+
     Returns:
         Average spread statistics for each trading pair
     """
@@ -460,13 +459,12 @@ async def get_spread_averages(
         spread_data = await market_data_service.get_spread_averages(
             pairs=request.pairs,
             connectors=request.connectors,
-            window_hours=request.window_hours
+            window_hours=request.window_hours,
         )
-        
+
         # Convert to response model
         return SpreadAverageResponse(
             data=[SpreadAverageData(**item) for item in spread_data],
-            window_hours=request.window_hours,
             total_pairs=len(spread_data),
             timestamp=time.time()
         )
@@ -484,7 +482,8 @@ async def get_spread_averages(
 async def get_spread_data(
     connector_name: str,
     trading_pair: str,
-    limit: int = Query(default=100, ge=1, le=100000),
+    limit: int = Query(default=100, ge=1, le=10000),
+    include_total_count: bool = Query(default=False),
     market_data_service: MarketDataService = Depends(get_market_data_service)
 ):
     """
@@ -493,6 +492,7 @@ async def get_spread_data(
     Query parameters:
         - trading_pair: Filter by trading pair (e.g., BTC-USDT)
         - connector_name: Filter by exchange (e.g., binance)
+        - include_total_count: Set true only when an exact total row count is needed
         
     Args:
         trading_pair: Optional trading pair filter
@@ -506,7 +506,8 @@ async def get_spread_data(
         result = await market_data_service.get_spread_data(
             pair=trading_pair,
             connector=connector_name,
-            limit=limit
+            limit=limit,
+            include_total_count=include_total_count,
         )
         
         return result
