@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Sequence
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.models import MarketData, MarketDataSpreadAgg
+from database.models import MarketData
 
 
 class OrderBookRepository:
@@ -73,29 +73,32 @@ class OrderBookRepository:
         self,
         pairs: Optional[Sequence[str]] = None,
         connectors: Optional[Sequence[str]] = None,
+        start_timestamp: Optional[int] = None,
     ) -> List[Dict]:
-        """Return per-pair spread stats from the precomputed rollup table."""
-        avg_spread = MarketDataSpreadAgg.sum_spread / func.nullif(
-            MarketDataSpreadAgg.cnt_spread, 0
-        )
+        """Return per-pair spread stats."""
         query = (
             select(
-                MarketDataSpreadAgg.trading_pair.label("pair"),
-                MarketDataSpreadAgg.exchange.label("connector"),
-                avg_spread.label("avg_spread"),
-                MarketDataSpreadAgg.min_spread.label("min_spread"),
-                MarketDataSpreadAgg.max_spread.label("max_spread"),
-                MarketDataSpreadAgg.cnt_spread.label("sample_count"),
+                MarketData.trading_pair.label("pair"),
+                MarketData.exchange.label("connector"),
+                func.avg(MarketData.spread).label("avg_spread"),
+                func.min(MarketData.spread).label("min_spread"),
+                func.max(MarketData.spread).label("max_spread"),
+                func.count(MarketData.spread).label("sample_count"),
             )
-            .where(MarketDataSpreadAgg.cnt_spread > 0)
-            .order_by(MarketDataSpreadAgg.exchange, MarketDataSpreadAgg.trading_pair)
+            .where(MarketData.spread.isnot(None))
+            .group_by(MarketData.exchange, MarketData.trading_pair)
+            .having(func.count(MarketData.spread) > 0)
+            .order_by(MarketData.exchange, MarketData.trading_pair)
         )
 
         if pairs:
-            query = query.where(MarketDataSpreadAgg.trading_pair.in_(pairs))
+            query = query.where(MarketData.trading_pair.in_(pairs))
 
         if connectors:
-            query = query.where(MarketDataSpreadAgg.exchange.in_(connectors))
+            query = query.where(MarketData.exchange.in_(connectors))
+
+        if start_timestamp is not None:
+            query = query.where(MarketData.timestamp >= start_timestamp)
 
         result = await self.session.execute(query)
         return [

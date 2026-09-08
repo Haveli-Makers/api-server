@@ -11,8 +11,6 @@ from typing import Dict, Optional, List, Any, Tuple
 from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import text
-
 from database.connection import AsyncDatabaseManager
 from database.repositories import OrderBookRepository
 from hummingbot.core.rate_oracle.rate_oracle import RateOracle
@@ -72,8 +70,6 @@ class MarketDataService:
 
         # Background tasks
         self._cleanup_task: Optional[asyncio.Task] = None
-        self._spread_agg_task: Optional[asyncio.Task] = None
-        self._spread_agg_interval = 60  
         self._is_running = False
 
         logger.info("MarketDataService initialized")
@@ -85,7 +81,6 @@ class MarketDataService:
         if not self._is_running:
             self._is_running = True
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-            self._spread_agg_task = asyncio.create_task(self._spread_agg_refresh_loop())
             self._rate_oracle.start()
             logger.info(
                 f"MarketDataService started with cleanup_interval={self._cleanup_interval}s, "
@@ -99,10 +94,6 @@ class MarketDataService:
         if self._cleanup_task:
             self._cleanup_task.cancel()
             self._cleanup_task = None
-
-        if self._spread_agg_task:
-            self._spread_agg_task.cancel()
-            self._spread_agg_task = None
 
         # Stop all candle feeds
         for feed_key, feed in self._candle_feeds.items():
@@ -742,18 +733,6 @@ class MarketDataService:
                 logger.error(f"Error in cleanup loop: {e}", exc_info=True)
                 await asyncio.sleep(self._cleanup_interval)
 
-    async def _spread_agg_refresh_loop(self):
-        while self._is_running:
-            try:
-                async with self._db_manager.get_session_context() as session:
-                    await session.execute(text("SELECT refresh_spread_agg()"))
-                await asyncio.sleep(self._spread_agg_interval)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error refreshing spread aggregate: {e}", exc_info=True)
-                await asyncio.sleep(self._spread_agg_interval)
-
     async def _cleanup_unused_feeds(self):
         """Clean up feeds that haven't been accessed within timeout."""
         current_time = time.time()
@@ -852,15 +831,16 @@ class MarketDataService:
         self,
         pairs: Optional[List[str]],
         connectors: Optional[List[str]],
+        window_hours: int = 24,
     ) -> List[Dict]:
         """
         Calculate average spread statistics grouped by trading pair and connector.
 
-        Served from the precomputed rollup, covering all recorded history.
 
         Args:
             pairs: List of trading pairs to filter
             connectors: List of connectors to filter
+            window_hours: Rolling look-back window in hours
 
         Returns:
             List of spread average data dictionaries
@@ -871,12 +851,17 @@ class MarketDataService:
             if not pairs and not connectors:
                 raise ValueError("At least one of 'pairs' or 'connectors' must be provided.")
 
+            start_timestamp = None
+            if window_hours and window_hours > 0:
+                start_timestamp = int(time.time() - window_hours * 3600)
+
             async with self._db_manager.get_session_context() as session:
                 orderbook_repo = OrderBookRepository(session)
 
                 avg_spread_data = await orderbook_repo.get_spread_averages(
                     pairs=pairs,
                     connectors=connectors,
+                    start_timestamp=start_timestamp,
                 )
 
                 logger.debug(f"Calculated spread averages for {len(avg_spread_data)} pairs")
