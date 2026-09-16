@@ -876,25 +876,27 @@ class MarketDataService:
         pair: str,
         connector: str,
         limit: int = 100,
+        offset: int = 0,
         include_total_count: bool = False,
     ) -> Dict:
         """
         Get raw spread samples from database.
-        
+
         Args:
             pair: Trading pair filter
             connector: Connector filter
             limit: Maximum number of records to return
-            
+            offset: Number of records to skip, for paginating beyond one page
+
         Returns:
             Dictionary with spread data and count
         """
         await self._db_manager.ensure_initialized()
-        
+
         try:
             async with self._db_manager.get_session_context() as session:
                 orderbook_repo = OrderBookRepository(session)
-                
+
                 fetch_limit = limit + 1 if limit else limit
 
                 # Get one extra row so callers can tell if more pages exist without
@@ -902,7 +904,8 @@ class MarketDataService:
                 samples = await orderbook_repo.get_spread_samples(
                     pair=pair,
                     connector=connector,
-                    limit=fetch_limit
+                    limit=fetch_limit,
+                    offset=offset
                 )
 
                 has_more = len(samples) > limit if limit else False
