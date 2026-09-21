@@ -1748,6 +1748,91 @@ class AccountsService:
             logger.error(f"Error getting trades: {e}")
             return []
 
+    _FILL_LEVEL_CONNECTORS = {"coindcx", "coinex", "coinswitch", "wazirx"}
+
+    def _normalize_exchange_trade(self, connector_name: str, raw: Dict) -> Dict:
+        def _first(*keys, default=None):
+            for k in keys:
+                if raw.get(k) not in (None, ""):
+                    return raw.get(k)
+            return default
+
+        base = connector_name.split("_perpetual")[0]
+
+        price = _first("price", "avg_price", "averagePrice")
+        amount = _first("quantity", "amount", "qty", "filledQuantity", "filled_amount")
+        fee = _first("fee_amount", "fee", "fees", "makerFee", "takerFee")
+        side = _first("side", "trade_type", "type")
+        symbol = _first("trading_pair", "symbol", "market")
+        order_id = _first("order_id", "orderId", "id")
+        ts = _first("timestamp", "time", "createdAt", "created_at", "updatedAt")
+
+        return {
+            "order_id": str(order_id) if order_id is not None else None,
+            "account_name": None,
+            "connector_name": connector_name,
+            "trading_pair": symbol,
+            "trade_type": str(side).upper() if side else None,
+            "order_type": None,
+            "amount": float(amount) if amount is not None else None,
+            "price": float(price) if price is not None else None,
+            "status": str(raw.get("status", "FILLED")).upper(),
+            "filled_amount": float(amount) if amount is not None else None,
+            "average_fill_price": float(price) if price is not None else None,
+            "fee_paid": float(fee) if fee is not None else None,
+            "fee_currency": raw.get("fee_currency") or raw.get("feeCurrency") or raw.get("fee_asset"),
+            "created_at": ts,
+            "updated_at": ts,
+            "exchange_order_id": str(order_id) if order_id is not None else None,
+            "error_message": None,
+            "source": "exchange",
+            "granularity": "fill" if base in self._FILL_LEVEL_CONNECTORS else "order",
+        }
+
+    async def get_exchange_trade_history(self, account_name: str, connector_name: str,
+                                        start_time: Optional[int] = None,
+                                        end_time: Optional[int] = None,
+                                        limit: int = 100,
+                                        trading_pairs: Optional[List[str]] = None) -> List[Dict]:
+        """
+        Fetches filled orders/trades directly from the exchange for the given
+        account+connector.
+        """
+        connector = await self.get_connector_instance(account_name, connector_name)
+
+        get_trades_fn = getattr(connector, "get_all_account_trades", None)
+        if get_trades_fn is None:
+            logger.warning(
+                f"Connector '{connector_name}' does not support get_all_account_trades; "
+                "exchange-side trade history is unavailable for it."
+            )
+            return []
+
+        try:
+            raw_trades = await get_trades_fn(
+                start_time=start_time, end_time=end_time, limit=limit, trading_pairs=trading_pairs
+            )
+        except Exception as e:
+            logger.error(f"Error fetching exchange trade history for {account_name}/{connector_name}: {e}")
+            return []
+
+        normalized = []
+        for raw in raw_trades or []:
+            if not isinstance(raw, dict):
+                continue
+            entry = self._normalize_exchange_trade(connector_name, raw)
+            entry["account_name"] = account_name
+            normalized.append(entry)
+
+        if trading_pairs:
+            def _norm_pair(value: Optional[str]) -> str:
+                return (value or "").replace("-", "").replace("_", "").upper()
+
+            wanted = {_norm_pair(p) for p in trading_pairs}
+            normalized = [e for e in normalized if _norm_pair(e.get("trading_pair")) in wanted]
+
+        return normalized
+
     async def get_account_positions(self, account_name: str, connector_name: str) -> List[Dict]:
         """
         Get current positions for a specific perpetual connector.
