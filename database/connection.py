@@ -59,15 +59,15 @@ class AsyncDatabaseManager:
         try:
             async with self.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-                
+
                 # Drop Hummingbot's native tables since we use our custom orders/trades tables
                 await self._drop_hummingbot_tables(conn)
-                
+
             logger.info("Database tables created successfully")
         except Exception as e:
             logger.error(f"Failed to create database tables: {e}")
             raise
-    
+
     async def _drop_hummingbot_tables(self, conn):
         """Drop Hummingbot's native database tables since we use custom ones."""
         hummingbot_tables = [
