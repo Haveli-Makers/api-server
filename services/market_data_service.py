@@ -16,6 +16,7 @@ from database.repositories import OrderBookRepository
 from hummingbot.core.rate_oracle.rate_oracle import RateOracle
 from hummingbot.data_feed.candles_feed.data_types import CandlesConfig
 from hummingbot.data_feed.candles_feed.candles_factory import CandlesFactory
+from services.unified_connector_service import UnifiedConnectorService
 
 
 logger = logging.getLogger(__name__)
@@ -861,9 +862,8 @@ class MarketDataService:
                 avg_spread_data = await orderbook_repo.get_spread_averages(
                     pairs=pairs,
                     connectors=connectors,
-                    start_timestamp=start_timestamp,
+                    start_timestamp=start_timestamp
                 )
-
                 logger.debug(f"Calculated spread averages for {len(avg_spread_data)} pairs")
                 return avg_spread_data
                 

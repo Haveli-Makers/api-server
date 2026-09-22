@@ -74,7 +74,7 @@ class ScriptRunResult(BaseModel):
     account_name: Optional[str] = None
     started_at: datetime
     completed_at: datetime
-    status: Literal["success", "failed"]
+    status: Literal["success", "failed", "timeout"]
     output: str = Field(description="Combined stdout and stderr from the script run")
     return_code: Optional[int] = None
 
