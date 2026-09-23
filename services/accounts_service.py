@@ -1748,8 +1748,6 @@ class AccountsService:
             logger.error(f"Error getting trades: {e}")
             return []
 
-    _FILL_LEVEL_CONNECTORS = {"coindcx", "coinex", "coinswitch", "wazirx"}
-
     def _normalize_exchange_trade(self, connector_name: str, raw: Dict) -> Dict:
         def _first(*keys, default=None):
             for k in keys:
@@ -1757,36 +1755,27 @@ class AccountsService:
                     return raw.get(k)
             return default
 
-        base = connector_name.split("_perpetual")[0]
-
         price = _first("price", "avg_price", "averagePrice")
         amount = _first("quantity", "amount", "qty", "filledQuantity", "filled_amount")
         fee = _first("fee_amount", "fee", "fees", "makerFee", "takerFee")
         side = _first("side", "trade_type", "type")
         symbol = _first("trading_pair", "symbol", "market")
         order_id = _first("order_id", "orderId", "id")
+        trade_id = _first("deal_id", "trade_id", "tradeId", "id")
         ts = _first("timestamp", "time", "createdAt", "created_at", "updatedAt")
 
         return {
-            "order_id": str(order_id) if order_id is not None else None,
-            "account_name": None,
-            "connector_name": connector_name,
             "trading_pair": symbol,
+            "order_id": str(order_id) if order_id is not None else None,
+            "trade_id": str(trade_id) if trade_id is not None else None,
             "trade_type": str(side).upper() if side else None,
-            "order_type": None,
             "amount": float(amount) if amount is not None else None,
             "price": float(price) if price is not None else None,
             "status": str(raw.get("status", "FILLED")).upper(),
             "filled_amount": float(amount) if amount is not None else None,
-            "average_fill_price": float(price) if price is not None else None,
             "fee_paid": float(fee) if fee is not None else None,
-            "fee_currency": raw.get("fee_currency") or raw.get("feeCurrency") or raw.get("fee_asset"),
             "created_at": ts,
             "updated_at": ts,
-            "exchange_order_id": str(order_id) if order_id is not None else None,
-            "error_message": None,
-            "source": "exchange",
-            "granularity": "fill" if base in self._FILL_LEVEL_CONNECTORS else "order",
         }
 
     async def get_exchange_trade_history(self, account_name: str, connector_name: str,
@@ -1821,7 +1810,6 @@ class AccountsService:
             if not isinstance(raw, dict):
                 continue
             entry = self._normalize_exchange_trade(connector_name, raw)
-            entry["account_name"] = account_name
             normalized.append(entry)
 
         if trading_pairs:
