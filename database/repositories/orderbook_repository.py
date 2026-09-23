@@ -18,20 +18,25 @@ class OrderBookRepository:
         connector: Optional[str] = None,
         start_timestamp: Optional[int] = None,
         end_timestamp: Optional[int] = None,
+        before_timestamp: Optional[int] = None,
         limit: Optional[int] = None,
         offset: int = 0
     ) -> List[Dict]:
         """
         Get raw spread samples with filtering and pagination.
-        
+
         Args:
             pair: Optional trading pair filter
             connector: Optional connector filter
             start_timestamp: Optional start time filter (milliseconds)
             end_timestamp: Optional end time filter (milliseconds)
+            before_timestamp: Optional keyset cursor - only rows strictly older than
+                this timestamp are returned. Use this (instead of offset) to page
+                through results while new rows keep being inserted, since it does
+                not shift as the underlying data changes.
             limit: Maximum number of records to return
             offset: Pagination offset
-            
+
         Returns:
             List of spread sample dictionaries
         """
@@ -57,7 +62,10 @@ class OrderBookRepository:
         
         if end_timestamp:
             query = query.where(MarketData.timestamp <= end_timestamp)
-        
+
+        if before_timestamp is not None:
+            query = query.where(MarketData.timestamp < before_timestamp)
+
         # Order by timestamp descending (most recent first)
         query = query.order_by(desc(MarketData.timestamp))
         

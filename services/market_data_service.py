@@ -877,6 +877,7 @@ class MarketDataService:
         connector: str,
         limit: int = 100,
         offset: int = 0,
+        before_timestamp: Optional[int] = None,
         include_total_count: bool = False,
     ) -> Dict:
         """
@@ -886,7 +887,12 @@ class MarketDataService:
             pair: Trading pair filter
             connector: Connector filter
             limit: Maximum number of records to return
-            offset: Number of records to skip, for paginating beyond one page
+            offset: Number of records to skip, for paginating beyond one page.
+                Ignored when before_timestamp is given.
+            before_timestamp: Keyset cursor - only rows strictly older than this
+                timestamp are returned. Prefer this over offset when paging
+                through many pages, since offset pagination shifts under
+                concurrently inserted rows while this cursor does not.
 
         Returns:
             Dictionary with spread data and count
@@ -904,8 +910,9 @@ class MarketDataService:
                 samples = await orderbook_repo.get_spread_samples(
                     pair=pair,
                     connector=connector,
+                    before_timestamp=before_timestamp,
                     limit=fetch_limit,
-                    offset=offset
+                    offset=offset if before_timestamp is None else 0
                 )
 
                 has_more = len(samples) > limit if limit else False
