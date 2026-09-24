@@ -1,5 +1,6 @@
 import asyncio
 import time
+from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException, Depends, Query
 from hummingbot.data_feed.candles_feed.data_types import HistoricalCandlesConfig, CandlesConfig
@@ -509,6 +510,7 @@ async def get_spread_data(
     trading_pair: str,
     limit: int = Query(default=100, ge=1, le=10000),
     offset: int = Query(default=0, ge=0),
+    before_timestamp: Optional[int] = Query(default=None),
     include_total_count: bool = Query(default=False),
     market_data_service: MarketDataService = Depends(get_market_data_service)
 ):
@@ -518,7 +520,11 @@ async def get_spread_data(
     Query parameters:
         - trading_pair: Filter by trading pair (e.g., BTC-USDT)
         - connector_name: Filter by exchange (e.g., binance)
-        - offset: Number of rows to skip, to page in past the 10,000-row limit cap
+        - offset: Number of rows to skip, to page in past the 10,000-row limit cap.
+          Ignored when before_timestamp is given.
+        - before_timestamp: Keyset cursor - only return rows strictly older than
+          this timestamp. Prefer this over offset when paging through many
+          pages, since offset shifts under concurrently inserted rows.
         - include_total_count: Set true only when an exact total row count is needed
 
     Args:
@@ -535,6 +541,7 @@ async def get_spread_data(
             connector=connector_name,
             limit=limit,
             offset=offset,
+            before_timestamp=before_timestamp,
             include_total_count=include_total_count,
         )
         

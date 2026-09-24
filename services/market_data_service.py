@@ -16,6 +16,7 @@ from database.repositories import OrderBookRepository
 from hummingbot.core.rate_oracle.rate_oracle import RateOracle
 from hummingbot.data_feed.candles_feed.data_types import CandlesConfig
 from hummingbot.data_feed.candles_feed.candles_factory import CandlesFactory
+from services.unified_connector_service import UnifiedConnectorService
 
 
 logger = logging.getLogger(__name__)
@@ -861,9 +862,8 @@ class MarketDataService:
                 avg_spread_data = await orderbook_repo.get_spread_averages(
                     pairs=pairs,
                     connectors=connectors,
-                    start_timestamp=start_timestamp,
+                    start_timestamp=start_timestamp
                 )
-
                 logger.debug(f"Calculated spread averages for {len(avg_spread_data)} pairs")
                 return avg_spread_data
                 
@@ -877,6 +877,7 @@ class MarketDataService:
         connector: str,
         limit: int = 100,
         offset: int = 0,
+        before_timestamp: Optional[int] = None,
         include_total_count: bool = False,
     ) -> Dict:
         """
@@ -886,7 +887,12 @@ class MarketDataService:
             pair: Trading pair filter
             connector: Connector filter
             limit: Maximum number of records to return
-            offset: Number of records to skip, for paginating beyond one page
+            offset: Number of records to skip, for paginating beyond one page.
+                Ignored when before_timestamp is given.
+            before_timestamp: Keyset cursor - only rows strictly older than this
+                timestamp are returned. Prefer this over offset when paging
+                through many pages, since offset pagination shifts under
+                concurrently inserted rows while this cursor does not.
 
         Returns:
             Dictionary with spread data and count
@@ -904,8 +910,9 @@ class MarketDataService:
                 samples = await orderbook_repo.get_spread_samples(
                     pair=pair,
                     connector=connector,
+                    before_timestamp=before_timestamp,
                     limit=fetch_limit,
-                    offset=offset
+                    offset=offset if before_timestamp is None else 0
                 )
 
                 has_more = len(samples) > limit if limit else False
