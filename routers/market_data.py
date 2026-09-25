@@ -149,6 +149,31 @@ async def get_available_candle_connectors():
     return list(CandlesFactory._candles_map.keys())
 
 
+@router.get("/candle-intervals/{connector}")
+async def get_candle_intervals(connector: str):
+    """
+    Get the list of candle intervals supported by a given connector.
+
+    Args:
+        connector: Connector name as returned by /available-candle-connectors
+
+    Returns:
+        List of interval strings (e.g. ["1m", "5m", "1h", "1d"]) supported by the connector
+
+    Raises:
+        HTTPException: 404 if the connector is not registered in CandlesFactory
+    """
+    connector_class = CandlesFactory._candles_map.get(connector)
+    if connector_class is None:
+        raise HTTPException(status_code=404, detail=f"The connector {connector} is not available.")
+    uninitialized_instance = object.__new__(connector_class)
+    try:
+        intervals = list(uninitialized_instance.intervals.keys())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to resolve intervals for {connector}: {e}")
+    return intervals
+
+
 # Enhanced Market Data Endpoints
 
 @router.post("/prices", response_model=PricesResponse)
