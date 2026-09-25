@@ -7,6 +7,7 @@ import re
 import shlex
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Type
@@ -21,7 +22,13 @@ from utils.hummingbot_scripts import get_hummingbot_script_path
 
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
-RUN_TIMEOUT_SECONDS = 120
+RUN_TIMEOUT_SECONDS = int(os.environ.get("SCRIPT_RUN_TIMEOUT_SECONDS", "240"))
+
+_io_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="script-runner-io")
+
+
+async def _run_io(func, *args):
+    return await asyncio.get_running_loop().run_in_executor(_io_executor, func, *args)
 
 
 def _utc_now() -> datetime:
@@ -253,13 +260,16 @@ class ImportableScriptBackend:
                 return result
         raise ValueError("Script does not expose run_once or fetch_and_store_spread")
 
-    async def run(self, request: ScriptProcessRunRequest, config_overrides: Optional[Dict] = None) -> ScriptRunResult:
+    async def run(self, request: ScriptProcessRunRequest, config_overrides: Optional[Dict] = None) -> Optional[ScriptRunResult]:
         started_at = _utc_now()
         run_id = str(uuid.uuid4())
         try:
             script_module = self._load_script_module(request.strategy_name)
             config_class = self._get_config_class(script_module)
             strategy_class = self._get_strategy_class(script_module)
+        except (FileNotFoundError, ValueError, ImportError):
+            return None
+        try:
             config_data = self._load_config(request.config_name)
             if config_overrides:
                 config_data = {**config_data, **config_overrides}
@@ -325,7 +335,7 @@ class ScriptRunnerService:
         if sdk_result is not None:
             return sdk_result
         importable_result = await self.importable_backend.run(request, config_overrides)
-        if importable_result.status == "success":
+        if importable_result is not None:
             return importable_result
         return await self.local_backend.run(request, config_overrides)
 
@@ -401,6 +411,7 @@ class ScriptRunnerService:
 
     async def _run_schedule(self, schedule: ScriptSchedule) -> ScriptRunResult:
         try:
+            started_at = _utc_now()
             request = ScriptProcessRunRequest(
                 strategy_name=schedule.strategy_name,
                 config_name=schedule.config_name,
@@ -416,7 +427,6 @@ class ScriptRunnerService:
                     timeout=RUN_TIMEOUT_SECONDS,
                 )
             except Exception as exc:
-                now = _utc_now()
                 status = "timeout" if isinstance(exc, asyncio.TimeoutError) else "failed"
                 output = (
                     f"Run exceeded {RUN_TIMEOUT_SECONDS}s and was abandoned"
@@ -428,8 +438,8 @@ class ScriptRunnerService:
                     strategy_name=schedule.strategy_name,
                     config_name=schedule.config_name,
                     account_name=schedule.account_name,
-                    started_at=now,
-                    completed_at=now,
+                    started_at=started_at,
+                    completed_at=_utc_now(),
                     status=status,
                     output=output,
                     return_code=1,
@@ -451,7 +461,7 @@ class ScriptRunnerService:
             self._running_schedule_ids.discard(schedule.id)
 
     async def _append_history(self, schedule_id: str, result: ScriptRunResult):
-        await asyncio.to_thread(self._append_history_sync, schedule_id, result)
+        await _run_io(self._append_history_sync, schedule_id, result)
 
     def _append_history_sync(self, schedule_id: str, result: ScriptRunResult):
         history_file = self.history_path / f"{schedule_id}.json"
@@ -470,7 +480,7 @@ class ScriptRunnerService:
 
     async def _save_schedules(self):
         payload = [schedule.model_dump(mode="json") for schedule in self._schedules.values()]
-        await asyncio.to_thread(self._save_schedules_sync, payload)
+        await _run_io(self._save_schedules_sync, payload)
 
     def _save_schedules_sync(self, payload: List[Dict]):
         self.storage_path.mkdir(parents=True, exist_ok=True)
