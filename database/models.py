@@ -344,6 +344,21 @@ class GatewayCLMMEvent(Base):
     position = relationship("GatewayCLMMPosition", back_populates="events")
 
 
+class ApiLog(Base):
+    __tablename__ = "api_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False, index=True)
+    method = Column(String(10), nullable=False)
+    path = Column(String, nullable=False, index=True)
+    query_string = Column(Text, nullable=True)
+    request_body = Column(Text, nullable=True)
+    response_body = Column(Text, nullable=True)
+    status_code = Column(Integer, nullable=False, index=True)
+    duration_ms = Column(Float, nullable=False)
+    username = Column(String, nullable=True, index=True)
+
+
 class MarketData(Base):
     __tablename__ = "MarketData"
     __table_args__ = (
