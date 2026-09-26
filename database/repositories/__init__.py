@@ -1,4 +1,5 @@
 from .account_repository import AccountRepository
+from .api_request_log_repository import ApiRequestLogRepository
 from .bot_run_repository import BotRunRepository
 from .executor_repository import ExecutorRepository
 from .funding_repository import FundingRepository
@@ -10,6 +11,7 @@ from .orderbook_repository import OrderBookRepository
 
 __all__ = [
     "AccountRepository",
+    "ApiRequestLogRepository",
     "BotRunRepository",
     "ExecutorRepository",
     "FundingRepository",
