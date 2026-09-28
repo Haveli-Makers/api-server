@@ -101,6 +101,10 @@ class V2ScriptDeployment(BaseModel):
     image: str = Field(default="hummingbot/hummingbot:latest", description="Docker image for the Hummingbot instance")
     script: Optional[str] = Field(default=None, description="Name of the script to run (without .py extension)")
     script_config: Optional[str] = Field(default=None, description="Name of the script configuration file (without .yml extension)")
+    connectors: Optional[List[str]] = Field(
+        default=None,
+        description="Connector credentials to copy from the profile (e.g. 'coindcx', 'zebpay__zebpay_org1'). "
+    )
     headless: bool = Field(default=False, description="Run in headless mode (no UI)")
 
     @field_validator("instance_name")

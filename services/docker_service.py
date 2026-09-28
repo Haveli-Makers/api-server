@@ -15,7 +15,7 @@ from docker.types import LogConfig
 from config import settings
 from models import V2ScriptDeployment
 from utils.file_system import fs_util
-from utils.hummingbot_scripts import get_hummingbot_scripts_path
+from utils.hummingbot_scripts import get_deployable_script_path, get_hummingbot_scripts_path
 
 
 class DockerService:
@@ -171,13 +171,11 @@ class DockerService:
             return {"success": False, "message": "Docker client is not available. Please make sure Docker is running."}
 
         if config.script:
-            script_file = config.script if config.script.endswith(".py") else f"{config.script}.py"
-            source_script_file = os.path.join("bots", "scripts", script_file)
-            if not os.path.exists(source_script_file):
-                return {
-                    "success": False,
-                    "message": f"Script file {script_file} not found in bots/scripts. Import or create it before deploying."
-                }
+            try:
+                script_path = get_deployable_script_path(config.script)
+            except FileNotFoundError as e:
+                return {"success": False, "message": str(e)}
+            hummingbot_scripts_path = str(script_path.parent)
 
         source_credentials_dir = os.path.join("bots", 'credentials', config.credentials_profile)
         if not os.path.isdir(source_credentials_dir):
@@ -185,6 +183,21 @@ class DockerService:
                 "success": False,
                 "message": f"Credentials profile '{config.credentials_profile}' not found in bots/credentials."
             }
+
+        selected_connector_files = None
+        if config.connectors:
+            selected_connector_files = {name.removesuffix(".yml") + ".yml" for name in config.connectors}
+            source_connectors_dir = os.path.join(source_credentials_dir, "connectors")
+            missing = sorted(
+                f for f in selected_connector_files
+                if not os.path.isfile(os.path.join(source_connectors_dir, f))
+            )
+            if missing:
+                return {
+                    "success": False,
+                    "message": f"Connector credentials not found in profile '{config.credentials_profile}': "
+                               f"{', '.join(missing)}"
+                }
 
         if not os.path.exists(instance_dir):
             os.makedirs(instance_dir)
@@ -200,6 +213,12 @@ class DockerService:
 
         # Copy the entire contents of source_credentials_dir to destination_credentials_dir     
         shutil.copytree(source_credentials_dir, destination_credentials_dir)
+
+        if selected_connector_files is not None:
+            destination_connectors_dir = os.path.join(destination_credentials_dir, "connectors")
+            for file_name in os.listdir(destination_connectors_dir):
+                if file_name.endswith(".yml") and file_name not in selected_connector_files:
+                    os.remove(os.path.join(destination_connectors_dir, file_name))
         os.makedirs(os.path.join(instance_dir, 'conf', 'scripts'), exist_ok=True)
         os.makedirs(os.path.join(instance_dir, 'conf', 'controllers'), exist_ok=True)
         

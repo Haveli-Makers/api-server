@@ -10,7 +10,6 @@ from models.scripts import CommunityScriptImport
 from pydantic import ValidationError
 from starlette import status
 
-from config import settings
 from deps import get_script_runner_service
 from models import (
     Script,
@@ -25,6 +24,7 @@ from models import (
 from services.script_runner import ScriptRunnerService
 from utils.file_system import fs_util
 from utils.hummingbot_scripts import (
+    get_community_scripts_path,
     get_hummingbot_bundled_scripts_path,
     get_hummingbot_script_path,
     get_hummingbot_scripts_path,
@@ -172,8 +172,7 @@ def _normalize_script_filename(script_name: str) -> str:
 
 def _get_community_script_path(script_name: str) -> str:
     """Resolve the absolute path of a script in the community scripts directory."""
-    community_dir = settings.app.community_scripts_path
-    return os.path.join(community_dir, _normalize_script_filename(script_name))
+    return os.path.join(get_community_scripts_path(), _normalize_script_filename(script_name))
 
 
 def _list_files_safe(directory: str) -> List[str]:
@@ -366,8 +365,8 @@ async def list_community_scripts():
     """
     List scripts available in the configured external community scripts directory.
     """
-    community_dir = settings.app.community_scripts_path
     try:
+        community_dir = get_community_scripts_path()
         return [
             f.replace(".py", "")
             for f in os.listdir(community_dir)
