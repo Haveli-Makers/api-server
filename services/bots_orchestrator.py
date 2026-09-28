@@ -44,8 +44,9 @@ class BotsOrchestrator:
         try:
             # Get the image name (first tag if available, otherwise the image ID)
             image_name = container.image.tags[0] if container.image.tags else str(container.image)
-            pattern = r'.+/hummingbot:'
-            return bool(re.match(pattern, image_name))
+            image_repository = image_name.split(":", 1)[0].lower()
+            excluded_names = {"hummingbot-api", "hummingbot-broker", "hummingbot-postgres"}
+            return container.name not in excluded_names and "hummingbot" in image_repository
         except Exception:
             return False
 
@@ -57,7 +58,7 @@ class BotsOrchestrator:
         return [
             container.name
             for container in self.docker_client.containers.list()
-            if container.status == "running"
+            if container.status == "running" and self.hummingbot_containers_fiter(container)
         ]
 
     def start(self):
@@ -279,9 +280,11 @@ class BotsOrchestrator:
         # TODO: improve logic of bots state management
         """Get status information for all active bots."""
         all_bots_status = {}
-        for bot in [bot for bot in self.active_bots if not self.is_bot_stopping(bot)]:
+        docker_bots = set(self._sync_get_active_containers())
+        cached_bots = set(self.active_bots)
+        for bot in [bot for bot in docker_bots | cached_bots if not self.is_bot_stopping(bot)]:
             status = self.get_bot_status(bot)
-            status["source"] = self.active_bots[bot].get("source", "unknown")
+            status["source"] = "docker" if bot in docker_bots else self.active_bots.get(bot, {}).get("source", "unknown")
             all_bots_status[bot] = status
         return all_bots_status
 
@@ -289,7 +292,8 @@ class BotsOrchestrator:
         """
         Get status information for a specific bot.
         """
-        if bot_name not in self.active_bots:
+        docker_bots = set(self._sync_get_active_containers())
+        if bot_name not in self.active_bots and bot_name not in docker_bots:
             return {"status": "not_found", "error": f"Bot {bot_name} not found"}
 
         try:
@@ -309,13 +313,16 @@ class BotsOrchestrator:
             performance = self.determine_controller_performance(controller_reports)
             error_logs = self.mqtt_manager.get_bot_error_logs(bot_name)
             general_logs = self.mqtt_manager.get_bot_logs(bot_name)
+            docker_running = bot_name in docker_bots
 
             # Check if bot has sent recent messages (within last 30 seconds)
             discovered_bots = self.mqtt_manager.get_discovered_bots(timeout_seconds=30)
             recently_active = bot_name in discovered_bots
 
             # Determine status based on performance data and recent activity
-            if len(performance) > 0 and recently_active:
+            if docker_running:
+                status = "running"
+            elif len(performance) > 0 and recently_active:
                 status = "running"
             elif len(performance) > 0 and not recently_active:
                 status = "idle"  # Has performance data but no recent activity
