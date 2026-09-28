@@ -1,5 +1,6 @@
 import asyncio
 import time
+from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException, Depends, Query
 from hummingbot.data_feed.candles_feed.data_types import HistoricalCandlesConfig, CandlesConfig
@@ -445,14 +446,13 @@ async def get_spread_averages(
 ):
     """
     Get average spread data grouped by trading pair.
-    
-    This endpoint calculates average spreads from the spread_samples table
-    within the given time window. Results are grouped by pair and connector.
-    
+
+    This endpoint calculates average spreads.
+
     Args:
         request: Spread average request parameters
         market_data_service: Injected market data service
-        
+
     Returns:
         Average spread statistics for each trading pair
     """
@@ -460,13 +460,12 @@ async def get_spread_averages(
         spread_data = await market_data_service.get_spread_averages(
             pairs=request.pairs,
             connectors=request.connectors,
-            window_hours=request.window_hours
+            window_hours=request.window_hours,
         )
-        
+
         # Convert to response model
         return SpreadAverageResponse(
             data=[SpreadAverageData(**item) for item in spread_data],
-            window_hours=request.window_hours,
             total_pairs=len(spread_data),
             timestamp=time.time()
         )
@@ -484,21 +483,30 @@ async def get_spread_averages(
 async def get_spread_data(
     connector_name: str,
     trading_pair: str,
-    limit: int = Query(default=100, ge=1, le=100000),
+    limit: int = Query(default=100, ge=1, le=10000),
+    offset: int = Query(default=0, ge=0),
+    before_timestamp: Optional[int] = Query(default=None),
+    include_total_count: bool = Query(default=False),
     market_data_service: MarketDataService = Depends(get_market_data_service)
 ):
     """
     Get raw spread samples from database.
-    
+
     Query parameters:
         - trading_pair: Filter by trading pair (e.g., BTC-USDT)
         - connector_name: Filter by exchange (e.g., binance)
-        
+        - offset: Number of rows to skip, to page in past the 10,000-row limit cap.
+          Ignored when before_timestamp is given.
+        - before_timestamp: Keyset cursor - only return rows strictly older than
+          this timestamp. Prefer this over offset when paging through many
+          pages, since offset shifts under concurrently inserted rows.
+        - include_total_count: Set true only when an exact total row count is needed
+
     Args:
         trading_pair: Optional trading pair filter
         connector_name: Optional connector filter
         market_data_service: Injected market data service
-        
+
     Returns:
         Dictionary with spread data samples and count
     """
@@ -506,7 +514,10 @@ async def get_spread_data(
         result = await market_data_service.get_spread_data(
             pair=trading_pair,
             connector=connector_name,
-            limit=limit
+            limit=limit,
+            offset=offset,
+            before_timestamp=before_timestamp,
+            include_total_count=include_total_count,
         )
         
         return result

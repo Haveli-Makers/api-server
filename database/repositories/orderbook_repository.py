@@ -1,6 +1,4 @@
-from datetime import datetime
-from typing import Dict, List, Optional
-from decimal import Decimal
+from typing import Dict, List, Optional, Sequence
 
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,24 +18,37 @@ class OrderBookRepository:
         connector: Optional[str] = None,
         start_timestamp: Optional[int] = None,
         end_timestamp: Optional[int] = None,
+        before_timestamp: Optional[int] = None,
         limit: Optional[int] = None,
         offset: int = 0
-    ) -> List[MarketData]:
+    ) -> List[Dict]:
         """
         Get raw spread samples with filtering and pagination.
-        
+
         Args:
             pair: Optional trading pair filter
             connector: Optional connector filter
             start_timestamp: Optional start time filter (milliseconds)
             end_timestamp: Optional end time filter (milliseconds)
+            before_timestamp: Optional keyset cursor - only rows strictly older than
+                this timestamp are returned. Use this (instead of offset) to page
+                through results while new rows keep being inserted, since it does
+                not shift as the underlying data changes.
             limit: Maximum number of records to return
             offset: Pagination offset
-            
+
         Returns:
-            List of MarketData objects
+            List of spread sample dictionaries
         """
-        query = select(MarketData)
+        query = select(
+            MarketData.trading_pair.label("pair"),
+            MarketData.exchange.label("connector"),
+            MarketData.timestamp,
+            MarketData.best_bid.label("bid"),
+            MarketData.best_ask.label("ask"),
+            MarketData.mid_price.label("mid"),
+            MarketData.spread,
+        )
         
         # Apply filters
         if pair:
@@ -51,7 +62,10 @@ class OrderBookRepository:
         
         if end_timestamp:
             query = query.where(MarketData.timestamp <= end_timestamp)
-        
+
+        if before_timestamp is not None:
+            query = query.where(MarketData.timestamp < before_timestamp)
+
         # Order by timestamp descending (most recent first)
         query = query.order_by(desc(MarketData.timestamp))
         
@@ -61,7 +75,51 @@ class OrderBookRepository:
         
         # Execute query
         result = await self.session.execute(query)
-        return result.scalars().all()
+        return [self._row_to_dict(row) for row in result.mappings().all()]
+
+    async def get_spread_averages(
+        self,
+        pairs: Optional[Sequence[str]] = None,
+        connectors: Optional[Sequence[str]] = None,
+        start_timestamp: Optional[int] = None,
+    ) -> List[Dict]:
+        """Return per-pair spread stats."""
+        query = (
+            select(
+                MarketData.trading_pair.label("pair"),
+                MarketData.exchange.label("connector"),
+                func.avg(MarketData.spread).label("avg_spread"),
+                func.min(MarketData.spread).label("min_spread"),
+                func.max(MarketData.spread).label("max_spread"),
+                func.count(MarketData.spread).label("sample_count"),
+            )
+            .where(MarketData.spread.isnot(None))
+            .group_by(MarketData.exchange, MarketData.trading_pair)
+            .having(func.count(MarketData.spread) > 0)
+            .order_by(MarketData.exchange, MarketData.trading_pair)
+        )
+
+        if pairs:
+            query = query.where(MarketData.trading_pair.in_(pairs))
+
+        if connectors:
+            query = query.where(MarketData.exchange.in_(connectors))
+
+        if start_timestamp is not None:
+            query = query.where(MarketData.timestamp >= start_timestamp)
+
+        result = await self.session.execute(query)
+        return [
+            {
+                "pair": row["pair"],
+                "connector": row["connector"],
+                "avg_spread": round(float(row["avg_spread"]), 2) if row["avg_spread"] is not None else 0.0,
+                "min_spread": float(row["min_spread"]) if row["min_spread"] is not None else 0.0,
+                "max_spread": float(row["max_spread"]) if row["max_spread"] is not None else 0.0,
+                "sample_count": int(row["sample_count"]),
+            }
+            for row in result.mappings().all()
+        ]
 
     async def count_spread_samples(
         self,
@@ -117,4 +175,15 @@ class OrderBookRepository:
             "ask": float(sample.best_ask) if sample.best_ask else None,
             "mid": float(sample.mid_price) if sample.mid_price else None,
             "spread": float(sample.spread) if sample.spread else None
+        }
+
+    def _row_to_dict(self, row: Dict) -> Dict:
+        return {
+            "pair": row["pair"],
+            "connector": row["connector"],
+            "timestamp": row["timestamp"],
+            "bid": float(row["bid"]) if row["bid"] is not None else None,
+            "ask": float(row["ask"]) if row["ask"] is not None else None,
+            "mid": float(row["mid"]) if row["mid"] is not None else None,
+            "spread": float(row["spread"]) if row["spread"] is not None else None,
         }
