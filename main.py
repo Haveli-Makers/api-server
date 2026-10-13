@@ -122,6 +122,7 @@ async def lifespan(app: FastAPI):
     secrets_manager = ETHKeyFileSecretManger(password=settings.security.config_password)
     db_manager = AsyncDatabaseManager(settings.database.url)
     await db_manager.create_tables()
+    db_manager.start_pool_monitor()
     logging.info("Database initialized")
 
     # Read rate oracle configuration from conf_client.yml
@@ -386,3 +387,16 @@ async def root():
         "version": VERSION,
         "status": "running",
     }
+
+
+@app.get("/health")
+async def health(request: Request):
+    """Liveness check for monitoring: 503 when the DB pool is exhausted or the DB is unreachable."""
+    db_manager = request.app.state.db_manager
+    pool = db_manager.pool_status()
+    pool_exhausted = pool["checked_out"] >= pool["max_connections"]
+    db_ok = False if pool_exhausted else await db_manager.health_check()
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if db_ok else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"status": "ok" if db_ok else "unhealthy", "db_reachable": db_ok, "db_pool": pool},
+    )

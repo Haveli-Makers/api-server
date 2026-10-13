@@ -1,13 +1,18 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, Optional
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from .models import Base
 
 logger = logging.getLogger(__name__)
+
+POOL_SIZE = 5
+POOL_MAX_OVERFLOW = 10
+POOL_MONITOR_INTERVAL_S = 60
 
 
 class AsyncDatabaseManager:
@@ -19,9 +24,9 @@ class AsyncDatabaseManager:
         self.engine = create_async_engine(
             database_url,
             # Connection pool settings for async
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
+            pool_size=POOL_SIZE,
+            max_overflow=POOL_MAX_OVERFLOW,
+            pool_timeout=10,  # Fail fast instead of hanging requests when the pool is exhausted
             pool_recycle=1800,  # Recycle connections after 30 minutes
             pool_pre_ping=True,  # Test connections before using them
             # Engine settings
@@ -29,16 +34,38 @@ class AsyncDatabaseManager:
             echo_pool=False,  # Set to True for connection pool logging
             # Connection arguments for asyncpg
             connect_args={
-                "server_settings": {"application_name": "hummingbot-api"},
+                "server_settings": {
+                    "application_name": "hummingbot-api",
+                    "idle_in_transaction_session_timeout": "300000",
+                    "statement_timeout": "60000",
+                },
                 "command_timeout": 60,
             }
         )
+        self._register_timeout_invalidation()
         self.async_session = async_sessionmaker(
-            self.engine, 
-            class_=AsyncSession, 
+            self.engine,
+            class_=AsyncSession,
             expire_on_commit=False
         )
         self._initialized = False
+        self._pool_monitor_task: Optional[asyncio.Task] = None
+
+    def _register_timeout_invalidation(self):
+        """
+        Treat asyncpg timeouts as disconnects.
+
+        When asyncpg's command_timeout fires mid-transaction (e.g. a BEGIN or pre-ping that
+        never gets a reply over a slow network), SQLAlchemy would otherwise keep treating the
+        connection as usable: the pool slot is never released and Postgres is left holding an
+        "idle in transaction" session. Flagging the error as a disconnect makes the pool close
+        and discard the connection instead.
+        """
+        @event.listens_for(self.engine.sync_engine, "handle_error")
+        def _invalidate_on_timeout(context):
+            if isinstance(context.original_exception, TimeoutError):
+                logger.warning(f"Database call timed out, discarding connection: {context.original_exception!r}")
+                context.is_disconnect = True
     
     async def ensure_initialized(self):
         """
@@ -85,6 +112,7 @@ class AsyncDatabaseManager:
             
     async def close(self):
         """Close all database connections."""
+        await self.stop_pool_monitor()
         await self.engine.dispose()
         logger.info("Database connections closed")
         
@@ -101,16 +129,49 @@ class AsyncDatabaseManager:
             async with db_manager.get_session_context() as session:
                 # Use session here
         """
-        async with self.async_session() as session:
+        session = self.async_session()
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await asyncio.shield(session.close())
+
+    def pool_status(self) -> Dict[str, int]:
+        """Current connection pool usage."""
+        pool = self.engine.pool
+        return {
+            "checked_out": pool.checkedout(),
+            "idle": pool.checkedin(),
+            "max_connections": POOL_SIZE + POOL_MAX_OVERFLOW,
+        }
+
+    def start_pool_monitor(self):
+        """Periodically log pool usage so a slow leak shows up before the pool is exhausted."""
+        if self._pool_monitor_task is None:
+            self._pool_monitor_task = asyncio.create_task(self._pool_monitor_loop())
+
+    async def stop_pool_monitor(self):
+        if self._pool_monitor_task:
+            self._pool_monitor_task.cancel()
             try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
-    
+                await self._pool_monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._pool_monitor_task = None
+
+    async def _pool_monitor_loop(self):
+        while True:
+            await asyncio.sleep(POOL_MONITOR_INTERVAL_S)
+            status = self.pool_status()
+            message = f"DB pool: {status['checked_out']}/{status['max_connections']} connections in use, {status['idle']} idle"
+            if status["checked_out"] >= status["max_connections"] - 2:
+                logger.warning(f"{message} - pool nearly exhausted")
+            else:
+                logger.info(message)
+
     async def health_check(self) -> bool:
         """
         Check if the database connection is healthy.
