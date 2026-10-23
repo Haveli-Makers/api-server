@@ -404,6 +404,61 @@ async def get_orders(
         raise HTTPException(status_code=500, detail=f"Error fetching orders: {str(e)}")
 
 
+@router.post("/orders/exchange-history", response_model=PaginatedResponse)
+async def get_exchange_order_history(
+    filter_request: OrderFilterRequest,
+    accounts_service: AccountsService = Depends(get_accounts_service),
+    connector_service = Depends(get_connector_service)
+):
+    """
+    Get filled orders/trades fetched LIVE from the exchange for the selected
+    account(s)/connector(s).
+    """
+    try:
+        if filter_request.account_names:
+            accounts_to_check = filter_request.account_names
+        else:
+            all_connectors = connector_service.get_all_trading_connectors()
+            accounts_to_check = list(all_connectors.keys())
+
+        all_trades = []
+        for account_name in accounts_to_check:
+            if filter_request.connector_names:
+                connector_names = filter_request.connector_names
+            else:
+                account_connectors = connector_service.get_all_trading_connectors().get(account_name, {})
+                connector_names = list(account_connectors.keys())
+
+            for connector_name in connector_names:
+                try:
+                    trades = await accounts_service.get_exchange_trade_history(
+                        account_name=account_name,
+                        connector_name=connector_name,
+                        start_time=filter_request.start_time,
+                        end_time=filter_request.end_time,
+                        limit=filter_request.limit,
+                        trading_pairs=filter_request.trading_pairs,
+                    )
+                    all_trades.extend(trades)
+                except Exception as e:
+                    logger.warning(f"Failed to get exchange trade history for {account_name}/{connector_name}: {e}")
+
+        all_trades.sort(key=lambda x: (x.get("created_at") or 0), reverse=True)
+        page_trades = all_trades[: filter_request.limit]
+
+        return PaginatedResponse(
+            data=page_trades,
+            pagination={
+                "limit": filter_request.limit,
+                "has_more": len(all_trades) > filter_request.limit,
+                "next_cursor": None,
+                "total_count": len(all_trades),
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching exchange trade history: {str(e)}")
+
+
 # Trade History
 @router.post("/trades", response_model=PaginatedResponse)
 async def get_trades(
