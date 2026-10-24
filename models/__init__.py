@@ -58,6 +58,7 @@ from .controllers import (
 from .scripts import (
     Script,
     ScriptResponse,
+    CommunityScriptImport,
     ScriptConfig,
     ScriptConfigResponse,
     ScriptRunRequest,
@@ -280,6 +281,7 @@ __all__ = [
     "ScriptRunRequest",
     "ScriptProcessRunRequest",
     "ScriptResponse",
+    "CommunityScriptImport",
     "ScriptConfig",
     "ScriptConfigResponse",
     "ScriptRunResult",

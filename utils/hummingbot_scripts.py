@@ -3,6 +3,8 @@ from pathlib import Path
 
 import hummingbot
 
+from config import settings
+
 
 def get_hummingbot_bundled_scripts_path() -> Path:
     """
@@ -42,12 +44,41 @@ def get_hummingbot_scripts_path() -> Path:
     return scripts_path
 
 
-def get_hummingbot_script_path(script_name: str) -> Path:
+def get_community_scripts_path() -> Path:
+    """
+    Return the community scripts directory.
+    """
+    configured_path = settings.app.community_scripts_path
+    if configured_path:
+        return Path(configured_path).expanduser().resolve()
+    return get_hummingbot_scripts_path() / "community"
+
+
+def _validate_script_stem(script_name: str) -> str:
     script_stem = script_name.removesuffix(".py")
     if not script_stem or Path(script_stem).name != script_stem or ".." in script_stem:
         raise FileNotFoundError(f"Invalid Hummingbot script name: '{script_name}'")
+    return script_stem
 
+
+def get_hummingbot_script_path(script_name: str) -> Path:
+    script_stem = _validate_script_stem(script_name)
     script_path = get_hummingbot_scripts_path() / f"{script_stem}.py"
     if not script_path.is_file():
         raise FileNotFoundError(f"Script '{script_name}' not found in imported hummingbot scripts")
     return script_path
+
+
+def get_deployable_script_path(script_name: str) -> Path:
+    """
+    Locate a script to deploy.
+    """
+    script_stem = _validate_script_stem(script_name)
+    search_dirs = [get_hummingbot_scripts_path(), get_community_scripts_path()]
+    for directory in search_dirs:
+        script_path = directory / f"{script_stem}.py"
+        if script_path.is_file():
+            return script_path
+    raise FileNotFoundError(
+        f"Script '{script_stem}.py' not found in: {', '.join(str(d) for d in search_dirs)}"
+    )

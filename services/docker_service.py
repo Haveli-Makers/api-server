@@ -15,7 +15,7 @@ from docker.types import LogConfig
 from config import settings
 from models import V2ScriptDeployment
 from utils.file_system import fs_util
-from utils.hummingbot_scripts import get_hummingbot_scripts_path
+from utils.hummingbot_scripts import get_deployable_script_path, get_hummingbot_scripts_path
 
 
 class DockerService:
@@ -167,13 +167,44 @@ class DockerService:
         hummingbot_scripts_path = str(get_hummingbot_scripts_path())
         instance_name = config.instance_name
         instance_dir = os.path.join("bots", 'instances', instance_name)
+        if not hasattr(self, "client"):
+            return {"success": False, "message": "Docker client is not available. Please make sure Docker is running."}
+
+        if config.script:
+            try:
+                script_path = get_deployable_script_path(config.script)
+            except FileNotFoundError as e:
+                return {"success": False, "message": str(e)}
+            hummingbot_scripts_path = str(script_path.parent)
+
+        source_credentials_dir = os.path.join("bots", 'credentials', config.credentials_profile)
+        if not os.path.isdir(source_credentials_dir):
+            return {
+                "success": False,
+                "message": f"Credentials profile '{config.credentials_profile}' not found in bots/credentials."
+            }
+
+        selected_connector_files = None
+        if config.connectors:
+            selected_connector_files = {name.removesuffix(".yml") + ".yml" for name in config.connectors}
+            source_connectors_dir = os.path.join(source_credentials_dir, "connectors")
+            missing = sorted(
+                f for f in selected_connector_files
+                if not os.path.isfile(os.path.join(source_connectors_dir, f))
+            )
+            if missing:
+                return {
+                    "success": False,
+                    "message": f"Connector credentials not found in profile '{config.credentials_profile}': "
+                               f"{', '.join(missing)}"
+                }
+
         if not os.path.exists(instance_dir):
             os.makedirs(instance_dir)
             os.makedirs(os.path.join(instance_dir, 'data'))
             os.makedirs(os.path.join(instance_dir, 'logs'))
 
         # Copy credentials to instance directory
-        source_credentials_dir = os.path.join("bots", 'credentials', config.credentials_profile)
         destination_credentials_dir = os.path.join(instance_dir, 'conf')
 
         # Remove the destination directory if it already exists
@@ -182,6 +213,14 @@ class DockerService:
 
         # Copy the entire contents of source_credentials_dir to destination_credentials_dir     
         shutil.copytree(source_credentials_dir, destination_credentials_dir)
+
+        if selected_connector_files is not None:
+            destination_connectors_dir = os.path.join(destination_credentials_dir, "connectors")
+            for file_name in os.listdir(destination_connectors_dir):
+                if file_name.endswith(".yml") and file_name not in selected_connector_files:
+                    os.remove(os.path.join(destination_connectors_dir, file_name))
+        os.makedirs(os.path.join(instance_dir, 'conf', 'scripts'), exist_ok=True)
+        os.makedirs(os.path.join(instance_dir, 'conf', 'controllers'), exist_ok=True)
         
         # Copy specific script config and referenced controllers if provided
         if config.script_config:
@@ -228,6 +267,20 @@ class DockerService:
         conf_file_path = f"instances/{instance_name}/conf/conf_client.yml"
         client_config = fs_util.read_yaml_file(conf_file_path)
         client_config['instance_id'] = instance_name
+        mqtt_bridge = client_config.setdefault('mqtt_bridge', {})
+        broker_host = settings.broker.host
+        if broker_host in {"localhost", "127.0.0.1"}:
+            broker_host = "host.docker.internal"
+        mqtt_bridge['mqtt_host'] = broker_host
+        mqtt_bridge['mqtt_port'] = settings.broker.port
+        mqtt_bridge['mqtt_username'] = settings.broker.username
+        mqtt_bridge['mqtt_password'] = settings.broker.password
+        mqtt_bridge['mqtt_logger'] = False
+        mqtt_bridge['mqtt_notifier'] = False
+        mqtt_bridge['mqtt_commands'] = False
+        mqtt_bridge['mqtt_events'] = False
+        mqtt_bridge['mqtt_external_events'] = False
+        mqtt_bridge['mqtt_autostart'] = False
         fs_util.dump_dict_to_yaml(conf_file_path, client_config)
 
         # Set up Docker volumes
