@@ -127,6 +127,13 @@ def _build_config_template(config_class: Type[BaseClientModel]) -> Dict[str, Dic
         if show_on_dashboard is not None:
             field_info["show_on_dashboard"] = show_on_dashboard
             
+        visible_when = extra.get("visible_when")
+        if isinstance(visible_when, dict):
+            field_info["visible_when"] = {
+                other_field: list(values) if isinstance(values, (list, tuple)) else [values]
+                for other_field, values in visible_when.items()
+            }
+
         input_type = extra.get("input_type")
         options = extra.get("options")
         if input_type in ("select", "multiselect") and isinstance(options, (list, tuple)):
@@ -303,8 +310,16 @@ async def run_script(
         )
 
     normalized_script_name = _normalize_script_name(request.script_name)
-    script = _instantiate_strategy(strategy_class, config)
-    result = await _run_script_once(script)
+    try:
+        script = _instantiate_strategy(strategy_class, config)
+        result = await _run_script_once(script)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Script '{normalized_script_name}' failed: {type(exc).__name__}: {exc}",
+        )
 
     return {
         "status": "success",

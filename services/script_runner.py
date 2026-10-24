@@ -272,7 +272,9 @@ class ImportableScriptBackend:
         try:
             config_data = self._load_config(request.config_name)
             if config_overrides:
-                config_data = {**config_data, **config_overrides}
+                model_fields = getattr(config_class, "model_fields", {})
+                applicable = {k: v for k, v in config_overrides.items() if k in model_fields}
+                config_data = {**config_data, **applicable}
             config = config_class(**config_data)
             script = self._instantiate_strategy(strategy_class, config)
             result = await self._run_script_once(script)
