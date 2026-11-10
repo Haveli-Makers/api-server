@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union
+from typing import Dict, Optional, Union
 from pydantic import BaseModel
 
 
@@ -10,8 +10,8 @@ class BacktestingConfig(BaseModel):
     config: Union[Dict, str]
 
 
-class OrderbookBacktestConfig(BaseModel):
-    strategy: str
+class ControllerOrderbookBacktestConfig(BaseModel):
+    """Run any strategy_v2 controller against recorded orderbook + trade data."""
     connector: str
     pair: str
     start: str
@@ -20,5 +20,4 @@ class OrderbookBacktestConfig(BaseModel):
     taker_fee: float = 0.001
     latency_ms: float = 100
     fill_at_touch: bool = False
-    strategy_args: Optional[Dict[str, Any]] = None
-    config_path: Optional[str] = None
+    config: Union[Dict, str]
