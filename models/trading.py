@@ -162,6 +162,11 @@ class ActiveOrderFilterRequest(PaginationParams):
     account_names: Optional[List[str]] = Field(default=None, description="List of account names to filter by")
     connector_names: Optional[List[str]] = Field(default=None, description="List of connector names to filter by")
     trading_pairs: Optional[List[str]] = Field(default=None, description="List of trading pairs to filter by")
+    include_exchange_orders: bool = Field(
+        default=True,
+        description="Also include open orders fetched live from the exchange (e.g. placed on the exchange's "
+                    "website).",
+    )
 
 
 class PositionFilterRequest(PaginationParams):
