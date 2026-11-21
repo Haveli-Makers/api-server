@@ -86,7 +86,8 @@ async def run_controller_orderbook_backtest(config: ControllerOrderbookBacktestC
                 controllers_module=settings.app.controllers_module,
             )
 
-        await engine.load_candles(controller_config, config.connector, config.pair, config.start, config.end)
+        await engine.load_candles(controller_config, config.connector, config.pair, config.start, config.end,
+                                  start_ts=config.start_ts, end_ts=config.end_ts)
 
         result = await asyncio.to_thread(
             _run_controller_orderbook_backtest_sync,
@@ -112,6 +113,8 @@ def _run_controller_orderbook_backtest_sync(engine, controller_config, config):
             pair=config.pair,
             start=config.start,
             end=config.end,
+            start_ts=config.start_ts,
+            end_ts=config.end_ts,
             maker_fee=config.maker_fee,
             taker_fee=config.taker_fee,
             latency_ms=config.latency_ms,

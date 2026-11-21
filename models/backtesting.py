@@ -16,6 +16,8 @@ class ControllerOrderbookBacktestConfig(BaseModel):
     pair: str
     start: str
     end: Optional[str] = None
+    start_ts: Optional[float] = None
+    end_ts: Optional[float] = None
     maker_fee: float = 0.001
     taker_fee: float = 0.001
     latency_ms: float = 100
