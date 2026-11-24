@@ -263,7 +263,12 @@ async def get_active_orders(
                                 if order.exchange_order_id:
                                     tracked_exchange_ids.add(str(order.exchange_order_id))
 
-                            if filter_request.include_exchange_orders and filter_request.trading_pairs:
+                            supports_pairless = getattr(
+                                connector, "supports_all_open_orders_without_pair", False
+                            )
+                            if filter_request.include_exchange_orders and (
+                                filter_request.trading_pairs or supports_pairless
+                            ):
                                 all_active_orders.extend(
                                     await _get_untracked_exchange_open_orders(
                                         connector, account_name, connector_name,
