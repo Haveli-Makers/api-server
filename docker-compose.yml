@@ -14,6 +14,7 @@ services:
       - BROKER_HOST=emqx
       - DATABASE_URL=postgresql+asyncpg://hbot:hummingbot-api@postgres:5432/hummingbot_api
       - GATEWAY_URL=http://host.docker.internal:15888
+      - INFLUXDB_URL=http://influxdb:8181
     extra_hosts:
       # Map host.docker.internal to host gateway for Linux compatibility
       # On macOS/Windows, Docker Desktop provides this automatically
@@ -78,6 +79,36 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+  influxdb:
+    # Bot monitoring (optional): bots write heartbeats, prices, orders and PnL here; see "Bot Monitoring" in the
+    # README. Starts only with the "monitoring" profile (`make monitoring`, or COMPOSE_PROFILES=monitoring).
+    # The admin token is created in the volume on the first start; `make monitoring` prints it.
+    container_name: hummingbot-influxdb
+    image: influxdb:3.12.2-core
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - sh
+      - -c
+      - >-
+        test -f "$$INFLUXDB3_ADMIN_TOKEN_FILE" ||
+        influxdb3 create token --admin --offline --output-file "$$INFLUXDB3_ADMIN_TOKEN_FILE" > /dev/null;
+        exec influxdb3 serve --node-id hbot --object-store file --data-dir /home/influxdb3/.influxdb3/data
+        --disable-authz health,ping
+    environment:
+      - INFLUXDB3_ADMIN_TOKEN_FILE=/home/influxdb3/.influxdb3/admin-token.json
+    volumes:
+      - influxdb-data:/home/influxdb3/.influxdb3
+    ports:
+      # This machine only: the API and the bots (host networking) connect to localhost:8181.
+      - "127.0.0.1:8181:8181"
+    networks:
+      - emqx-bridge
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8181/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 networks:
   emqx-bridge:
@@ -88,3 +119,4 @@ volumes:
   emqx-log: { }
   emqx-etc: { }
   postgres-data: { }
+  influxdb-data: { }

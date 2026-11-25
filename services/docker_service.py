@@ -259,6 +259,12 @@ class DockerService:
         if config.headless:
             environment["HEADLESS"] = "true"
 
+        # Bot monitoring: the bot writes its heartbeats, prices, orders and PnL to InfluxDB
+        if settings.influxdb.enabled:
+            environment["INFLUXDB_URL"] = settings.influxdb.bot_url
+            environment["INFLUXDB_TOKEN"] = settings.influxdb.token
+            environment["INFLUXDB_DATABASE"] = settings.influxdb.database
+
         log_config = LogConfig(
             type="json-file",
             config={

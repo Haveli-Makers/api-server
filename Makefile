@@ -1,4 +1,4 @@
-.PHONY: setup run deploy stop install uninstall build install-pre-commit
+.PHONY: setup run deploy stop install uninstall build install-pre-commit monitoring
 
 SETUP_SENTINEL := .setup-complete
 
@@ -19,7 +19,16 @@ deploy: $(SETUP_SENTINEL)
 
 # Stop all services
 stop:
-	docker compose down
+	docker compose --profile monitoring down
+
+# Bot monitoring: start InfluxDB and print the lines to add to .env
+monitoring:
+	docker compose --profile monitoring up -d influxdb
+	@echo ""
+	@echo "Add these lines to .env, then restart the API:"
+	@echo "  INFLUXDB_ENABLED=true"
+	@docker compose --profile monitoring exec -T influxdb sh -c 'for i in $$(seq 1 30); do test -f "$$INFLUXDB3_ADMIN_TOKEN_FILE" && break; sleep 1; done; sed -nE "s/.*\"token\": *\"([^\"]+)\".*/  INFLUXDB_TOKEN=\1/p" "$$INFLUXDB3_ADMIN_TOKEN_FILE"'
+	@echo "  COMPOSE_PROFILES=monitoring    (so make deploy starts InfluxDB too)"
 
 # Install conda environment
 install:

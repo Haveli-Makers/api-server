@@ -75,6 +75,34 @@ class GatewaySettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GATEWAY_", extra="ignore")
 
 
+class InfluxDBSettings(BaseSettings):
+    """
+    Bot monitoring with InfluxDB 3: bots write their heartbeats, prices, orders and PnL to InfluxDB, and the API
+    watches the heartbeats and serves the /metrics endpoints. Off unless INFLUXDB_ENABLED is true.
+    """
+
+    enabled: bool = Field(default=False, description="Turn on bot monitoring with InfluxDB")
+    url: str = Field(default="http://localhost:8181", description="InfluxDB URL as the API reaches it")
+    bot_url: str = Field(
+        default="http://localhost:8181",
+        description="InfluxDB URL as the bots reach it (they run with host networking)"
+    )
+    token: str = Field(default="", description="InfluxDB admin token (printed by `make monitoring`)")
+    database: str = Field(default="hbot", description="Database the bots write to")
+    retention: str = Field(default="14d", description="How long data is kept; set when the database is created")
+    watcher_interval: float = Field(default=5.0, description="Seconds between bot health checks")
+    process_timeout: float = Field(
+        default=20.0,
+        description="Seconds without a process heartbeat before a bot counts as down"
+    )
+    strategy_timeout: float = Field(
+        default=10.0,
+        description="Seconds without a strategy heartbeat before the strategy loop counts as down"
+    )
+
+    model_config = SettingsConfigDict(env_prefix="INFLUXDB_", extra="ignore")
+
+
 class AppSettings(BaseSettings):
     """Main application settings."""
     
@@ -112,6 +140,7 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     aws: AWSSettings = Field(default_factory=AWSSettings)
     gateway: GatewaySettings = Field(default_factory=GatewaySettings)
+    influxdb: InfluxDBSettings = Field(default_factory=InfluxDBSettings)
     app: AppSettings = Field(default_factory=AppSettings)
     
     # Direct banned_tokens field to handle env parsing

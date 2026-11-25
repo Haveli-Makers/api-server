@@ -48,6 +48,8 @@ from services.market_data_service import MarketDataService
 from services.trading_service import TradingService
 from services.executor_service import ExecutorService
 from services.script_runner import ScriptRunnerService
+from services.influxdb_client import InfluxDBClient
+from services.bot_health_watcher import BotHealthWatcher
 from database import AsyncDatabaseManager
 from utils.bot_archiver import BotArchiver
 from routers import (
@@ -63,6 +65,7 @@ from routers import (
     gateway_swap,
     gateway_clmm,
     market_data,
+    metrics,
     portfolio,
     rate_oracle,
     scripts,
@@ -80,6 +83,11 @@ logging.basicConfig(
 
 # Enable debug logging for MQTT manager
 logging.getLogger('services.mqtt_manager').setLevel(logging.DEBUG)
+
+# Bot monitoring logs each bot status change: down at WARNING; back, stopped and started at INFO.
+# (The root logger stays at WARNING: a library imported above calls logging.basicConfig first.)
+logging.getLogger('services.bot_health_watcher').setLevel(logging.INFO)
+logging.getLogger('services.influxdb_client').setLevel(logging.INFO)
 
 
 # Get settings from Pydantic Settings
@@ -237,6 +245,24 @@ async def lifespan(app: FastAPI):
     )
     script_runner_service = ScriptRunnerService()
 
+    # Bot monitoring (InfluxDB): off unless INFLUXDB_ENABLED is true
+    influxdb_client = None
+    bot_health_watcher = None
+    if settings.influxdb.enabled:
+        influxdb_client = InfluxDBClient(
+            url=settings.influxdb.url,
+            database=settings.influxdb.database,
+            token=settings.influxdb.token
+        )
+        bot_health_watcher = BotHealthWatcher(
+            client=influxdb_client,
+            retention=settings.influxdb.retention,
+            interval=settings.influxdb.watcher_interval,
+            process_timeout=settings.influxdb.process_timeout,
+            strategy_timeout=settings.influxdb.strategy_timeout
+        )
+        logging.info(f"Bot monitoring on: InfluxDB {settings.influxdb.url}, database {settings.influxdb.database}")
+
     # Initialize database
     await db_manager.ensure_initialized()
     # =========================================================================
@@ -254,6 +280,8 @@ async def lifespan(app: FastAPI):
     app.state.gateway_service = gateway_service
     app.state.bot_archiver = bot_archiver
     app.state.script_runner_service = script_runner_service
+    app.state.influxdb_client = influxdb_client
+    app.state.bot_health_watcher = bot_health_watcher
 
     # =========================================================================
     # 7. Start services
@@ -270,6 +298,8 @@ async def lifespan(app: FastAPI):
     executor_service.start()
     await script_runner_service.start()
     await executor_service.recover_positions_from_db()
+    if bot_health_watcher:
+        bot_health_watcher.start()
 
     logging.info("All services started successfully")
 
@@ -282,6 +312,10 @@ async def lifespan(app: FastAPI):
     logging.info("Shutting down services...")
 
     bots_orchestrator.stop()
+    if bot_health_watcher:
+        await bot_health_watcher.stop()
+    if influxdb_client:
+        await influxdb_client.close()
     await accounts_service.stop()
     await executor_service.stop()
     await script_runner_service.stop()
@@ -377,6 +411,7 @@ app.include_router(rate_oracle.router, dependencies=[Depends(auth_user)])
 app.include_router(backtesting.router, dependencies=[Depends(auth_user)])
 app.include_router(archived_bots.router, dependencies=[Depends(auth_user)])
 app.include_router(executors.router, dependencies=[Depends(auth_user)])
+app.include_router(metrics.router, dependencies=[Depends(auth_user)])
 
 @app.get("/")
 async def root():

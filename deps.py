@@ -1,4 +1,4 @@
-from fastapi import Request
+from fastapi import HTTPException, Request
 from services.bots_orchestrator import BotsOrchestrator
 from services.accounts_service import AccountsService
 from services.docker_service import DockerService
@@ -8,6 +8,7 @@ from services.market_data_service import MarketDataService
 from services.trading_service import TradingService
 from services.executor_service import ExecutorService
 from services.script_runner import ScriptRunnerService
+from services.influxdb_client import InfluxDBClient
 from utils.bot_archiver import BotArchiver
 from database import AsyncDatabaseManager
 
@@ -65,3 +66,12 @@ def get_bot_archiver(request: Request) -> BotArchiver:
 def get_database_manager(request: Request) -> AsyncDatabaseManager:
     """Get AsyncDatabaseManager from app state."""
     return request.app.state.db_manager
+
+
+def get_influxdb_client(request: Request) -> InfluxDBClient:
+    """Get the InfluxDB client from app state; 503 while bot monitoring is off."""
+    client = getattr(request.app.state, "influxdb_client", None)
+    if client is None:
+        raise HTTPException(status_code=503,
+                            detail="Bot monitoring is off. Set INFLUXDB_ENABLED=true and restart the API.")
+    return client
