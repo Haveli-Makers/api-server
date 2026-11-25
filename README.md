@@ -163,8 +163,8 @@ database on startup, with data kept for 14 days.
 | `GET /metrics/status-changes` | What the watcher noticed: down, up again, stopped, started |
 | `GET /metrics/bots` | Bots that reported a price in the last day |
 | `GET /metrics/pnl` | PnL per bot and controller over time |
-| `GET /metrics/orders?bot=` | One bot's price, orders (placed until filled or cancelled), fills (partial and final) and grid reference |
-| `GET /metrics/ladder?bot=` | One bot right now: open orders, price, grid state, PnL |
+| `GET /metrics/orders?bot=` | One bot's price, orders (placed until filled or cancelled), fills (partial and final) and grid reference. Add `exchange=` and `pair=` for one market of a bot that trades several |
+| `GET /metrics/ladder?bot=` | One bot right now: open orders, price, grid state, PnL. Takes `exchange=` and `pair=` too |
 | `GET /metrics/markets`, `/metrics/feeds`, `/metrics/market` | Market recorder data: mid, spread, depth, book age |
 
 Windows are given in minutes, up to 72 hours, the most InfluxDB 3 Core reads in one query.
@@ -176,9 +176,9 @@ Windows are given in minutes, up to 72 hours, the most InfluxDB 3 Core reads in 
 | `bot_heartbeat` | Bot: process thread every 5 s, strategy loop every 1 s | `bot`, `level` (`process`, `strategy`) | `seen` |
 | `bot_lifecycle` | Bot, when it starts and when it stops on purpose | `bot` | `event` (`started`, `stopped`) |
 | `bot_price` | Bot, every second | `bot`, `exchange`, `pair` | `best_bid`, `best_ask`, `mid_price` |
-| `controller_performance` | Bot, every second | `bot`, `controller` | `realized_pnl_quote`, `unrealized_pnl_quote`, `global_pnl_quote`, `volume_traded`, ... |
-| `grid_state` | Bot (grid strategies) | `bot`, `controller`, `exchange`, `pair` | `reference_price`, `levels_total`, `levels_placed` |
-| `grid_level` | Bot (grid strategies) | `bot`, `controller`, `side`, `level` | `price`, `amount`, `state`, `order_id` |
+| `controller_performance` | Bot, every 5 s (V2 strategies) | `bot`, `controller` | `realized_pnl_quote`, `unrealized_pnl_quote`, `global_pnl_quote`, `volume_traded`, ... |
+| `grid_state` | Bot, every 5 s (grid strategies) | `bot`, `controller`, `exchange`, `pair` | `reference_price`, `levels_total`, `levels_placed` |
+| `grid_level` | Bot, every 5 s (grid strategies) | `bot`, `controller`, `side`, `level` | `price`, `amount`, `state`, `order_id` |
 | `open_order` | Bot, every 5 s, one row per open order | `bot`, `exchange`, `pair`, `side` | `order_id`, `price`, `amount`, `filled`, `level`, `age_s` |
 | `order_event` | Bot, on each order event | `bot`, `exchange`, `pair`, `side`, `event` (`created`, `partially_filled`, `filled`, `cancelled`, `failed`, `expired`) | `order_id`, `price`, `amount`, `level`, `realized_pnl` |
 | `market` | Market recorder, every second | `exchange`, `pair`, `source` | `best_bid`, `best_ask`, `mid_price`, `spread_pct`, `bid_depth_quote_1_0`, `ask_depth_quote_1_0` (also `0_5`, `2_0`), `book_age_s` |

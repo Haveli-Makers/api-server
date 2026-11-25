@@ -31,6 +31,8 @@ def _minutes(default: int):
 
 
 END = Query(default=None, description="End of the window (UTC); now if left out")
+EXCHANGE = Query(default=None, description="Only this exchange (for a bot that trades several markets)")
+PAIR = Query(default=None, description="Only this trading pair (for a bot that trades several markets)")
 
 
 # ---------------------------------------------------------------------------------------------------- health
@@ -131,7 +133,7 @@ async def get_status_changes(minutes: int = _minutes(1440), end: Optional[dateti
 async def get_bots(client: InfluxDBClient = Depends(get_influxdb_client)):
     """Bots that reported a price in the last day, with the exchange and pair they trade."""
     return await _query(client, "SELECT DISTINCT bot, exchange, pair FROM bot_price "
-                                "WHERE time > now() - INTERVAL '1 day' ORDER BY bot")
+                                "WHERE time > now() - INTERVAL '1 day' ORDER BY bot, exchange, pair")
 
 
 @router.get("/pnl")
@@ -149,14 +151,17 @@ async def get_pnl(minutes: int = _minutes(360), end: Optional[datetime] = END, b
 
 @router.get("/orders")
 async def get_orders(bot: str, minutes: int = _minutes(60), end: Optional[datetime] = END,
+                     exchange: Optional[str] = EXCHANGE, pair: Optional[str] = PAIR,
                      client: InfluxDBClient = Depends(get_influxdb_client)):
     """
     Everything the orders-vs-price chart needs for one bot: its price, one segment per order (placed until filled,
-    cancelled or now), its fills (partial and final), and the grid's reference price.
+    cancelled or now), its fills (partial and final), and the grid's reference price. exchange and pair narrow it
+    to one market, for a bot that trades several.
     """
     bot = _name(bot, "bot")
     window, start, stop = _window(minutes, end)
-    where = f"bot = '{bot}' AND {window}"
+    bot_window = f"bot = '{bot}' AND {window}"
+    where = bot_window + _market_filter(exchange, pair)
     bucket = _price_bucket_seconds(minutes)
     if bucket is None:
         price = await _query(client, f"SELECT time, best_bid, best_ask, mid_price FROM bot_price WHERE {where} "
@@ -169,7 +174,9 @@ async def get_orders(bot: str, minutes: int = _minutes(60), end: Optional[dateti
     snapshots = await _query(client, "SELECT order_id, side, min(time) AS first_seen, max(time) AS last_seen, "
                                      "avg(price) AS price, max(amount) AS amount, max(level) AS level "
                                      f"FROM open_order WHERE {where} GROUP BY order_id, side")
-    latest = await _query(client, f"SELECT max(time) AS t FROM open_order WHERE {where}")
+    # One snapshot lists the open orders of every market the bot trades, so the latest one is looked up across all
+    # of them: a market with nothing open writes no rows, and its last order must still count as gone.
+    latest = await _query(client, f"SELECT max(time) AS t FROM open_order WHERE {bot_window}")
     reference = await _query(client, f"SELECT time, reference_price FROM grid_state WHERE {where} ORDER BY time")
 
     segments = build_segments(
@@ -185,30 +192,43 @@ async def get_orders(bot: str, minutes: int = _minutes(60), end: Optional[dateti
               "amount": event["amount"], "partial": event["event"] == "partially_filled", "level": event.get("level"),
               "realized_pnl": event.get("realized_pnl")}
              for event in events if event.get("event") in FILL_EVENTS]
-    return {"bot": bot, "price": price, "segments": segments, "fills": fills, "reference": reference}
+    return {"bot": bot, "exchange": exchange, "pair": pair, "price": price, "segments": segments, "fills": fills,
+            "reference": reference}
 
 
 @router.get("/ladder")
-async def get_ladder(bot: str, client: InfluxDBClient = Depends(get_influxdb_client)):
-    """One bot right now: the orders in its latest open-order snapshot, its price, grid state and PnL."""
+async def get_ladder(bot: str, exchange: Optional[str] = EXCHANGE, pair: Optional[str] = PAIR,
+                     client: InfluxDBClient = Depends(get_influxdb_client)):
+    """
+    One bot right now: the orders in its latest open-order snapshot, its price, grid state and PnL. exchange and
+    pair narrow it to one market, for a bot that trades several.
+    """
     bot = _name(bot, "bot")
+    market = _market_filter(exchange, pair)
     rows = await _query(client, f"SELECT * FROM open_order WHERE bot = '{bot}' "
                                 "AND time > now() - INTERVAL '1 minute' ORDER BY time DESC")
     orders, snapshot_age = [], None
     if rows:
-        newest = _epoch(rows[0]["time"])
-        snapshot_age = time.time() - newest
-        if snapshot_age <= 15:  # a bot that stopped writes no snapshots, so an old one means "nothing open"
-            orders = [row for row in rows if newest - _epoch(row["time"]) < 1]
+        newest = _epoch(rows[0]["time"])  # the latest snapshot, which covers every market the bot trades
+        mine = [row for row in rows if (not exchange or row.get("exchange") == exchange)
+                and (not pair or row.get("pair") == pair)]
+        if mine:
+            snapshot_age = time.time() - _epoch(mine[0]["time"])
+        if time.time() - newest <= 15:  # a bot that stopped writes no snapshots, so an old one means "nothing open"
+            orders = [row for row in mine if newest - _epoch(row["time"]) < 1]
 
-    async def latest(table: str) -> Optional[Dict]:
-        found = await _query(client, f"SELECT * FROM {table} WHERE bot = '{bot}' "
+    async def latest(table: str, condition: str = "") -> Optional[Dict]:
+        found = await _query(client, f"SELECT * FROM {table} WHERE bot = '{bot}'{condition} "
                                      "AND time > now() - INTERVAL '5 minutes' ORDER BY time DESC LIMIT 1")
         return found[0] if found else None
 
-    return {"bot": bot, "orders": sorted(orders, key=lambda order: -order["price"]), "snapshot_age_s": snapshot_age,
-            "price": await latest("bot_price"), "state": await latest("grid_state"),
-            "performance": await latest("controller_performance")}
+    state = await latest("grid_state", market)
+    # PnL rows carry no market, only the controller: with a market picked, use the controller whose grid trades it.
+    controller = (state or {}).get("controller")
+    by_controller = f" AND controller = '{controller}'" if market and controller and SAFE_NAME.match(controller) else ""
+    return {"bot": bot, "exchange": exchange, "pair": pair, "orders": sorted(orders, key=lambda order: -order["price"]),
+            "snapshot_age_s": snapshot_age, "price": await latest("bot_price", market), "state": state,
+            "performance": await latest("controller_performance", by_controller)}
 
 
 # ------------------------------------------------------------------------------------------------- markets
@@ -308,6 +328,12 @@ def _name(value: str, what: str) -> str:
     if not SAFE_NAME.match(value):
         raise HTTPException(status_code=400, detail=f"Invalid {what}: {value!r}")
     return value
+
+
+def _market_filter(exchange: Optional[str], pair: Optional[str]) -> str:
+    """The SQL for the optional exchange and pair filters; empty when neither is given."""
+    return ((f" AND exchange = '{_name(exchange, 'exchange')}'" if exchange else "")
+            + (f" AND pair = '{_name(pair, 'pair')}'" if pair else ""))
 
 
 def _window(minutes: int, end: Optional[datetime]) -> Tuple[str, float, float]:
