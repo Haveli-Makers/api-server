@@ -249,6 +249,7 @@ async def get_active_orders(
                             # Get in-flight orders directly from connector
                             in_flight_orders = connector.in_flight_orders
 
+                            tracked_exchange_ids = set()
                             for client_order_id, order in in_flight_orders.items():
                                 # Apply trading pair filter if specified
                                 if filter_request.trading_pairs and order.trading_pair not in filter_request.trading_pairs:
@@ -258,11 +259,25 @@ async def get_active_orders(
                                 standardized_order = _standardize_in_flight_order_response(order, account_name, connector_name)
                                 standardized_order["_cursor_id"] = client_order_id  # Use client_order_id as cursor
                                 all_active_orders.append(standardized_order)
+                                tracked_exchange_ids.add(str(client_order_id))
+                                if order.exchange_order_id:
+                                    tracked_exchange_ids.add(str(order.exchange_order_id))
+
+                            supports_pairless = getattr(
+                                connector, "supports_all_open_orders_without_pair", False
+                            )
+                            if filter_request.include_exchange_orders and (
+                                filter_request.trading_pairs or supports_pairless
+                            ):
+                                all_active_orders.extend(
+                                    await _get_untracked_exchange_open_orders(
+                                        connector, account_name, connector_name,
+                                        filter_request.trading_pairs, tracked_exchange_ids,
+                                    )
+                                )
 
                         except Exception as e:
                             # Log error but continue with other connectors
-                            import logging
-
                             logger.warning(f"Failed to get active orders for {account_name}/{connector_name}: {e}")
 
         # Sort by cursor_id for consistent pagination
@@ -758,6 +773,81 @@ async def get_funding_payments(
         raise HTTPException(status_code=500, detail=f"Error fetching funding payments: {str(e)}")
 
 
+EXCHANGE_OPEN_ORDERS_TIMEOUT = 10  
+
+
+def _to_iso_timestamp(value) -> Optional[str]:
+    """Exchange timestamps come as epoch seconds, epoch milliseconds or ISO strings."""
+    from datetime import datetime, timezone
+
+    if value in (None, ""):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return value  
+    try:
+        seconds = float(value) / 1000 if float(value) > 1e11 else float(value)
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+async def _get_untracked_exchange_open_orders(connector, account_name: str, connector_name: str,
+                                              trading_pairs: Optional[List[str]],
+                                              tracked_ids: set) -> List[dict]:
+    """
+    Open orders listed live by the exchange that Hummingbot isn't tracking, e.g. orders placed on the
+    exchange's website or app.
+    """
+    import asyncio
+
+    get_open_orders = getattr(connector, "get_all_open_orders", None)
+    if get_open_orders is None:
+        return []
+    try:
+        raw_orders = await asyncio.wait_for(get_open_orders(trading_pairs=trading_pairs),
+                                            timeout=EXCHANGE_OPEN_ORDERS_TIMEOUT)
+    except Exception as e:
+        logger.warning(f"Failed to get exchange open orders for {account_name}/{connector_name}: {e}")
+        return []
+
+    orders = []
+    for raw in raw_orders or []:
+        if not isinstance(raw, dict):
+            continue
+        exchange_order_id = str(raw.get("exchange_order_id") or "")
+        client_order_id = str(raw.get("client_order_id") or "")
+        if (exchange_order_id and exchange_order_id in tracked_ids) or (client_order_id and client_order_id in tracked_ids):
+            continue
+        if trading_pairs and raw.get("trading_pair") not in trading_pairs:
+            continue
+        created_at = _to_iso_timestamp(raw.get("created_at"))
+        orders.append({
+            "order_id": client_order_id or exchange_order_id,
+            "account_name": account_name,
+            "connector_name": connector_name,
+            "trading_pair": raw.get("trading_pair"),
+            "trade_type": str(raw.get("trade_type") or "").upper(),
+            "order_type": str(raw.get("order_type") or "").upper(),
+            "amount": float(raw.get("amount") or 0),
+            "price": float(raw["price"]) if raw.get("price") else None,
+            "status": str(raw.get("status") or "OPEN").upper(),
+            "filled_amount": float(raw.get("filled_amount") or 0),
+            "average_fill_price": None,
+            "fee_paid": None,
+            "fee_currency": None,
+            "created_at": created_at,
+            "updated_at": created_at,
+            "exchange_order_id": exchange_order_id or None,
+            "error_message": None,
+            "source": "exchange", 
+            "_cursor_id": f"exchange:{exchange_order_id or client_order_id}",
+        })
+    return orders
+
+
 def _standardize_in_flight_order_response(order, account_name: str, connector_name: str) -> dict:
     """
     Convert a Hummingbot InFlightOrder to standardized format matching the orders search response.
@@ -816,4 +906,5 @@ def _standardize_in_flight_order_response(order, account_name: str, connector_na
         "updated_at": updated_at,
         "exchange_order_id": order.exchange_order_id,
         "error_message": None,  # InFlightOrder doesn't store error messages
+        "source": "hummingbot",
     }
