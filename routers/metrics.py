@@ -1,7 +1,8 @@
 """
-Bot monitoring: reads back what bots write to InfluxDB (heartbeats, prices, orders, PnL), what the market recorder
-writes (order book samples), and what the bot health watcher writes (bot_up, bot_status_change). Every endpoint
-except /metrics/health needs INFLUXDB_ENABLED=true; see "Bot monitoring" in the README for the tables.
+Bot monitoring: reads back what bots write to InfluxDB (heartbeats, prices, orders, PnL), what account monitors write
+(balances, open orders, fills and order book samples of one exchange account), what the market recorder writes (order
+book samples), and what the bot health watcher writes (bot_up, bot_status_change). Every endpoint except
+/metrics/health needs INFLUXDB_ENABLED=true; see "Bot monitoring" in the README for the tables.
 
 Windows are given in minutes, from 5 up to 4320 (72 hours: InfluxDB 3 Core reads at most about 72 hours of a table
 in one query), and end at `end` (UTC) or now.
@@ -231,6 +232,91 @@ async def get_ladder(bot: str, exchange: Optional[str] = EXCHANGE, pair: Optiona
             "performance": await latest("controller_performance", by_controller)}
 
 
+# ------------------------------------------------------------------------------------------------- accounts
+
+ACCOUNT = Query(description="The account's name, as its account monitor writes it")
+ACCOUNT_EXCHANGE = Query(description="The exchange of that account")
+# InfluxDB answers times like 2026-11-26T07:00:00.123456789; only that shape goes back into SQL.
+STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z?$")
+
+
+@router.get("/accounts")
+async def get_accounts(client: InfluxDBClient = Depends(get_influxdb_client)):
+    """
+    Accounts an account monitor wrote about in the last day, each with its latest update: when (age_s), what it
+    could read (balances_ok, orders_ok, fills_ok), counts, and any error.
+    """
+    rows = await _query(
+        client,
+        "SELECT * FROM (SELECT *, row_number() OVER (PARTITION BY account, exchange ORDER BY time DESC) AS newest "
+        "FROM account_update WHERE time > now() - INTERVAL '1 day') WHERE newest = 1 ORDER BY account, exchange")
+    now = time.time()
+    return [{**{key: value for key, value in row.items() if key != "newest"}, "age_s": now - _epoch(row["time"])}
+            for row in rows]
+
+
+@router.get("/balances")
+async def get_balances(account: str = ACCOUNT, exchange: str = ACCOUNT_EXCHANGE, minutes: int = _minutes(360),
+                       end: Optional[datetime] = END, client: InfluxDBClient = Depends(get_influxdb_client)):
+    """
+    One account's balances: `latest`, what it holds now per asset (assets at zero left out), and `history`, total and
+    available per asset over the window: the last value in each time bucket, since a balance is a level (an average
+    would hide a balance that dropped to zero mid-bucket).
+    """
+    where = _account_filter(account, exchange)
+    latest = await _query(
+        client,
+        "SELECT asset, total, available, time FROM (SELECT asset, total, available, time, "
+        "row_number() OVER (PARTITION BY asset ORDER BY time DESC) AS newest "
+        f"FROM account_balance WHERE {where} AND time > now() - INTERVAL '1 day') "
+        "WHERE newest = 1 AND total > 0 ORDER BY asset")
+    history = await _query(
+        client,
+        f"SELECT date_bin(INTERVAL '{_pnl_bucket(minutes)}', time) AS time, asset, "
+        "last_value(total ORDER BY time) AS total, last_value(available ORDER BY time) AS available "
+        f"FROM account_balance WHERE {where} AND {_window(minutes, end)[0]} GROUP BY 1, 2 ORDER BY 1, 2")
+    return {"account": account, "exchange": exchange, "latest": latest, "history": history}
+
+
+@router.get("/account-orders")
+async def get_account_orders(account: str = ACCOUNT, exchange: str = ACCOUNT_EXCHANGE,
+                             client: InfluxDBClient = Depends(get_influxdb_client)):
+    """
+    The account's open orders now, whoever placed them (any bot, or a person): the rows of the latest update that
+    read them, highest price first, and snapshot_age_s, how old that read is. `error` is the latest update's error.
+    """
+    where = _account_filter(account, exchange)
+    latest = await _query(client, f"SELECT time, error FROM account_update WHERE {where} "
+                                  "AND time > now() - INTERVAL '1 day' ORDER BY time DESC LIMIT 1")
+    read = await _query(client, f"SELECT time, open_orders FROM account_update WHERE {where} AND orders_ok = true "
+                                "AND time > now() - INTERVAL '1 day' ORDER BY time DESC LIMIT 1")
+    answer = {"account": account, "exchange": exchange, "orders": [], "snapshot_age_s": None,
+              "error": (latest[0].get("error") or None) if latest else None}
+    if not read:
+        return answer
+    stamp = str(read[0]["time"])
+    answer["snapshot_age_s"] = time.time() - _epoch(stamp)
+    if not read[0].get("open_orders") or not STAMP.match(stamp):
+        return answer
+    # The update's rows share its time, plus one nanosecond per row.
+    at = f"to_timestamp('{stamp.rstrip('Z')}Z')"
+    orders = await _query(client, f"SELECT * FROM account_open_order WHERE {where} AND time >= {at} "
+                                  f"AND time < {at} + INTERVAL '1 millisecond'")
+    answer["orders"] = sorted(orders, key=lambda order: -(order.get("price") or 0))
+    return answer
+
+
+@router.get("/fills")
+async def get_fills(account: str = ACCOUNT, exchange: str = ACCOUNT_EXCHANGE, minutes: int = _minutes(1440),
+                    end: Optional[datetime] = END, pair: Optional[str] = Query(default=None, description="Only this pair"),
+                    limit: int = Query(default=500, ge=1, le=5000),
+                    client: InfluxDBClient = Depends(get_influxdb_client)):
+    """The account's fills in the window, newest first: price, amount, quote amount and fee of each trade."""
+    where = _account_filter(account, exchange) + (f" AND pair = '{_name(pair, 'pair')}'" if pair else "")
+    return await _query(client, f"SELECT * FROM account_fill WHERE {where} AND {_window(minutes, end)[0]} "
+                                f"ORDER BY time DESC LIMIT {limit}")
+
+
 # ------------------------------------------------------------------------------------------------- markets
 
 
@@ -255,12 +341,13 @@ async def get_feeds(client: InfluxDBClient = Depends(get_influxdb_client)):
 @router.get("/market")
 async def get_market(exchange: str, pair: str, minutes: int = _minutes(60), end: Optional[datetime] = END,
                      client: InfluxDBClient = Depends(get_influxdb_client)):
-    """One market over time: mid price, spread %, quote depth within 1% on each side, and book age."""
+    """One market over time: best bid and ask, mid price, spread %, quote depth within 1% on each side, book age."""
     exchange, pair = _name(exchange, "exchange"), _name(pair, "pair")
     bucket = _price_bucket_seconds(minutes) or 1
     return await _query(
         client,
-        f"SELECT date_bin(INTERVAL '{bucket} seconds', time) AS time, avg(mid_price) AS mid_price, "
+        f"SELECT date_bin(INTERVAL '{bucket} seconds', time) AS time, avg(best_bid) AS best_bid, "
+        "avg(best_ask) AS best_ask, avg(mid_price) AS mid_price, "
         "avg(spread_pct) AS spread_pct, avg(bid_depth_quote_1_0) AS bid_depth_1pct, "
         "avg(ask_depth_quote_1_0) AS ask_depth_1pct, max(book_age_s) AS book_age_s "
         f"FROM market WHERE exchange = '{exchange}' AND pair = '{pair}' AND {_window(minutes, end)[0]} "
@@ -321,6 +408,10 @@ async def _uptime_segments(client: InfluxDBClient, minutes: int, end: Optional[d
         segment.setdefault("ongoing", False)
         segment["duration_s"] = round((segment["end"] - segment["start"]).total_seconds())
     return segments
+
+
+def _account_filter(account: str, exchange: str) -> str:
+    return f"account = '{_name(account, 'account')}' AND exchange = '{_name(exchange, 'exchange')}'"
 
 
 def _name(value: str, what: str) -> str:

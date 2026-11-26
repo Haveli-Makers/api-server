@@ -165,9 +165,18 @@ database on startup, with data kept for 14 days.
 | `GET /metrics/pnl` | PnL per bot and controller over time |
 | `GET /metrics/orders?bot=` | One bot's price, orders (placed until filled or cancelled), fills (partial and final) and grid reference. Add `exchange=` and `pair=` for one market of a bot that trades several |
 | `GET /metrics/ladder?bot=` | One bot right now: open orders, price, grid state, PnL. Takes `exchange=` and `pair=` too |
-| `GET /metrics/markets`, `/metrics/feeds`, `/metrics/market` | Market recorder data: mid, spread, depth, book age |
+| `GET /metrics/accounts` | Accounts an account monitor wrote about in the last day, with its latest update and errors |
+| `GET /metrics/balances?account=&exchange=` | One account's balances now (`latest`) and over the window (`history`) |
+| `GET /metrics/account-orders?account=&exchange=` | One account's open orders now, whoever placed them, and how old that read is |
+| `GET /metrics/fills?account=&exchange=` | One account's fills in the window, newest first. Takes `pair=` too |
+| `GET /metrics/markets`, `/metrics/feeds`, `/metrics/market` | Order book samples from account monitors and the market recorder: bid, ask, mid, spread, depth, book age |
 
 Windows are given in minutes, up to 72 hours, the most InfluxDB 3 Core reads in one query.
+
+**Account monitor.** The account endpoints read what hummingbot's `account_monitor` script writes: a bot that never
+trades, run with one exchange account's keys and the same INFLUXDB_* settings as other bots. It sees the whole
+account, whatever places the orders. Its config names the account, the exchange, the pairs to watch, and how often to
+read (`update_interval`, default 5 s).
 
 **Tables** (what bots and the API write; `bot` is the bot's instance name)
 
@@ -181,7 +190,11 @@ Windows are given in minutes, up to 72 hours, the most InfluxDB 3 Core reads in 
 | `grid_level` | Bot, every 5 s (grid strategies) | `bot`, `controller`, `side`, `level` | `price`, `amount`, `state`, `order_id` |
 | `open_order` | Bot, every 5 s, one row per open order | `bot`, `exchange`, `pair`, `side` | `order_id`, `price`, `amount`, `filled`, `level`, `age_s` |
 | `order_event` | Bot, on each order event | `bot`, `exchange`, `pair`, `side`, `event` (`created`, `partially_filled`, `filled`, `cancelled`, `failed`, `expired`) | `order_id`, `price`, `amount`, `level`, `realized_pnl` |
-| `market` | Market recorder, every second | `exchange`, `pair`, `source` | `best_bid`, `best_ask`, `mid_price`, `spread_pct`, `bid_depth_quote_1_0`, `ask_depth_quote_1_0` (also `0_5`, `2_0`), `book_age_s` |
+| `market` | Market recorder, and account monitors (`source=account_monitor`), every second | `exchange`, `pair`, `source` | `best_bid`, `best_ask`, `mid_price`, `spread_pct`, `bid_depth_quote_1_0`, `ask_depth_quote_1_0` (also `0_5`, `2_0` from the recorder), `book_age_s` |
+| `account_balance` | Account monitor, every update (default 5 s), per asset with a balance | `account`, `exchange`, `asset` | `total`, `available` |
+| `account_open_order` | Account monitor, every update: every open order on the account, at the update's time | `account`, `exchange`, `pair`, `side` | `order_id`, `client_order_id`, `price`, `amount`, `filled`, `status`, `created_ms` |
+| `account_fill` | Account monitor, each new trade, at the trade's time | `account`, `exchange`, `pair`, `side`, `trade_id` | `order_id`, `price`, `amount`, `quote_amount`, `fee` |
+| `account_update` | Account monitor, every update | `account`, `exchange` | `balances_ok`, `orders_ok`, `fills_ok`, `assets`, `open_orders`, `new_fills`, `error` |
 | `bot_up` | API health watcher, every check | `bot`, `level` | `up` (1 or 0) |
 | `bot_status_change` | API health watcher, on each change | `bot`, `level`, `state` (`up`, `down`, `stopped`, `started`) | `message` |
 
