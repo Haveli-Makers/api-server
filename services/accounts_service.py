@@ -10,6 +10,8 @@ from fastapi import HTTPException
 from hummingbot.client.config.config_crypt import ETHKeyFileSecretManger
 from hummingbot.connector.connector_base import ConnectorBase
 from hummingbot.core.data_type.common import OrderType, TradeType, PositionAction, PositionMode
+from hummingbot.core.rate_oracle.rate_oracle import RATE_ORACLE_SOURCES
+from hummingbot.core.rate_oracle.utils import find_rate
 
 from config import settings
 from database import AsyncDatabaseManager, AccountRepository, OrderRepository, TradeRepository, FundingRepository
@@ -509,6 +511,8 @@ class AccountsService:
         # Trading interfaces per account (for executor use)
         self._trading_interfaces: Dict[str, AccountTradingInterface] = {}
 
+        self._rate_sources: Dict[str, Optional[Any]] = {}
+
     def get_trading_interface(self, account_name: str) -> AccountTradingInterface:
         """
         Get or create a trading interface for the specified account.
@@ -791,35 +795,176 @@ class AccountsService:
                 self.accounts_state[account_name][connector_name] = result
 
     async def _get_connector_tokens_info(self, connector, connector_name: str) -> List[Dict]:
-        """Get token info from a connector instance using cached prices when available."""
+        """Get token info for a connector, priced in the default quote (USDT)."""
         balances = [{"token": key, "units": value} for key, value in connector.get_all_balances().items() if
                     value != Decimal("0") and key not in settings.banned_tokens]
-        unique_tokens = [balance["token"] for balance in balances]
-        trading_pairs = [self.get_default_market(token, connector_name) for token in unique_tokens if "USD" not in token]
-        
-        # Get fresh prices for all trading pairs
-        all_prices = {}
-        if trading_pairs:
-            all_prices = await self._safe_get_last_traded_prices(connector, trading_pairs)
-        
+
+        base_connector_name = connector_name.split("__")[0]
+        source_prices = await self._get_source_prices(base_connector_name, connector=connector)
+
+        global_prices = None
+        connector_prices = {}
+        connector_prices_fetched = False
+
+        priced_via = {} 
         tokens_info = []
         for balance in balances:
             token = balance["token"]
             if "USD" in token:
                 price = Decimal("1")
+                priced_via[token] = "stable"
             else:
-                market = self.get_default_market(balance["token"], connector_name)
-                price = Decimal(str(all_prices.get(market, 0)))
-                
+                price = self._price_from_source(token, source_prices)
+                priced_via[token] = "exchange" if price > 0 else "none"
+
+                if price <= 0:
+                    if global_prices is None:
+                        global_prices = await self._get_global_oracle_prices()
+                    oracle_price = self._price_from_global_oracle(token, global_prices)
+                    if oracle_price > 0:
+                        price = oracle_price
+                        priced_via[token] = "oracle"
+
+                if price <= 0:
+                    if not connector_prices_fetched:
+                        fallback_pairs = [
+                            self.get_default_market(b["token"], connector_name)
+                            for b in balances if "USD" not in b["token"]
+                        ]
+                        if fallback_pairs:
+                            connector_prices = await self._safe_get_last_traded_prices(connector, fallback_pairs)
+                        connector_prices_fetched = True
+                    market = self.get_default_market(token, connector_name)
+                    price = Decimal(str(connector_prices.get(market, 0)))
+                    if price > 0:
+                        priced_via[token] = "connector"
+
             tokens_info.append({
-                "token": balance["token"],
+                "token": token,
                 "units": float(balance["units"]),
                 "price": float(price),
                 "value": float(price * balance["units"]),
-                "available_units": float(connector.get_available_balance(balance["token"]))
+                "available_units": float(connector.get_available_balance(token))
             })
+
+        unpriced = [t for t, how in priced_via.items() if how == "none"]
+        logger.info(
+            f"Priced {connector_name}: exchange_source_pairs={len(source_prices)}, "
+            f"by_tier={ {how: sum(1 for v in priced_via.values() if v == how) for how in set(priced_via.values())} }"
+            + (f", unpriced={unpriced}" if unpriced else "")
+        )
         return tokens_info
-    
+
+    async def _get_global_oracle_prices(self) -> Dict[str, Decimal]:
+        """Fetch all pairs' prices from the global rate oracle, with timeout and error handling."""
+        mds = self._market_data_service
+        if mds is None or getattr(mds, "rate_oracle", None) is None:
+            return {}
+        oracle = mds.rate_oracle
+        try:
+            prices = oracle.prices  
+            if prices:
+                return prices
+            return await asyncio.wait_for(
+                oracle.source.get_prices(quote_token=oracle.quote_token), timeout=10
+            ) or {}
+        except Exception as e:
+            logger.error(f"Error fetching prices from global rate oracle: {e}")
+            return {}
+
+    def _price_from_global_oracle(self, token: str, global_prices: Dict[str, Decimal]) -> Decimal:
+        """Price a token in the default quote from the global rate oracle, routing indirectly 
+        (e.g. through INR) when there's no direct TOKEN-<quote> pair. Returns 0 when unpriceable."""
+        if not global_prices:
+            return Decimal("0")
+        quote = "USDT"
+        mds = self._market_data_service
+        if mds is not None and getattr(mds, "rate_oracle", None) is not None:
+            quote = mds.rate_oracle.quote_token or "USDT"
+        try:
+            rate = find_rate(global_prices, f"{token}-{quote}")
+        except Exception:
+            return Decimal("0")
+        return rate if rate and rate > 0 else Decimal("0")
+
+    def _price_from_source(self, token: str, source_prices: Dict[str, Decimal]) -> Decimal:
+        """Price a token in the default quote from a per-exchange price map, routing indirectly
+        (e.g. through INR) when there's no direct TOKEN-<quote> pair. Returns 0 when unpriceable."""
+        if not source_prices:
+            return Decimal("0")
+        try:
+            rate = find_rate(source_prices, f"{token}-{self.default_quote}")
+        except Exception as e:
+            logger.debug(f"find_rate failed for {token}-{self.default_quote}: {e}")
+            return Decimal("0")
+        return rate if rate and rate > 0 else Decimal("0")
+
+    def _get_rate_source(self, base_connector_name: str):
+        """Get (and cache) the rate source matching a base connector name, or None if there's
+        no matching source or it can't be built."""
+        if base_connector_name not in self._rate_sources:
+            source_cls = RATE_ORACLE_SOURCES.get(base_connector_name)
+            if source_cls is None:
+                self._rate_sources[base_connector_name] = None
+            else:
+                try:
+                    self._rate_sources[base_connector_name] = source_cls()
+                except Exception as e:
+                    logger.warning(f"Could not build rate source for {base_connector_name}: {e}")
+                    self._rate_sources[base_connector_name] = None
+        return self._rate_sources[base_connector_name]
+
+    async def _get_source_prices(self, base_connector_name: str, connector=None,
+                                 timeout: float = 10) -> Dict[str, Decimal]:
+        """Fetch all pairs' prices from the rate source matching the exchange.
+        Returns {} when nothing can price the exchange, so callers fall back to connector prices.
+        """
+        source = self._get_rate_source(base_connector_name)
+        if source is not None:
+            prices = await self._fetch_source_prices(source, base_connector_name, timeout)
+            if prices:
+                return prices
+
+        if (connector is not None and base_connector_name in RATE_ORACLE_SOURCES
+                and hasattr(connector, "get_all_pairs_prices")):
+            auth_source = self._build_authenticated_rate_source(base_connector_name, connector)
+            if auth_source is not None:
+                return await self._fetch_source_prices(auth_source, f"{base_connector_name} (authenticated)", timeout)
+
+        return {}
+
+    async def _fetch_source_prices(self, source, label: str, timeout: float) -> Dict[str, Decimal]:
+        """Call a rate source's get_prices with timeout/error handling; returns {} on failure."""
+        try:
+            prices = await asyncio.wait_for(source.get_prices(quote_token=None), timeout=timeout)
+            return prices or {}
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout fetching rates from {label} rate source")
+            return {}
+        except Exception as e:
+            logger.error(f"Error fetching rates from {label} rate source: {e}")
+            return {}
+
+    def _build_authenticated_rate_source(self, base_connector_name: str, connector):
+        """Build an authenticated rate source for a connector, injecting the connector into the source."""
+        source_cls = RATE_ORACLE_SOURCES.get(base_connector_name)
+        if source_cls is None:
+            return None
+        try:
+            source = source_cls()
+            injected = False
+            for attr in list(vars(source)):
+                if attr.endswith("_exchange"):
+                    setattr(source, attr, connector)
+                    injected = True
+            if not injected:
+                return None
+            return source
+        except Exception as e:
+            logger.warning(f"Could not build authenticated rate source for {base_connector_name}: {e}")
+            return None
+
+
     async def _safe_get_last_traded_prices(self, connector, trading_pairs, timeout=10):
         """Safely get last traded prices with timeout and error handling. Preserves previous prices on failure."""
         try:
