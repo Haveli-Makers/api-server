@@ -117,3 +117,28 @@ async def get_supported_order_types(request: Request, connector_name: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving order types: {str(e)}")
+
+
+@router.get("/{connector_name}/active-orders-capability")
+async def get_active_orders_capability(request: Request, connector_name: str):
+    """Get the capability of a connector to fetch all open orders."""
+    try:
+        market_data_service: MarketDataService = request.app.state.market_data_service
+
+        try:
+            connector_instance = market_data_service.connector_service.get_data_connector(connector_name)
+        except (KeyError, ValueError) as e:
+            raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found: {str(e)}")
+
+        can_fetch = callable(getattr(connector_instance, "get_all_open_orders", None))
+        supports_pairless = bool(getattr(connector_instance, "supports_all_open_orders_without_pair", False))
+        return {
+            "connector": connector_name,
+            "can_fetch_exchange_open_orders": can_fetch,
+            "supports_all_open_orders_without_pair": supports_pairless and can_fetch,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving active orders capability: {str(e)}")
